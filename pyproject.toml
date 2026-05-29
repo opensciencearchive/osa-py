@@ -1,5 +1,5 @@
 [project]
-name = "osa"
+name = "osa-py"
 version = "0.1.0"
 description = "OSA Python SDK — validators and transforms for the Open Scientific Archive"
 readme = "README.md"
