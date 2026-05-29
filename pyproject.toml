@@ -1,0 +1,50 @@
+[project]
+name = "osa"
+version = "0.1.0"
+description = "OSA Python SDK — validators and transforms for the Open Scientific Archive"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "Rory Byrne", email = "rory@rory.bio" }
+]
+requires-python = ">=3.13"
+keywords = ["scientific-data", "metadata", "validation", "oci", "archive"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2",
+    "pyyaml>=6.0.3",
+    "typer>=0.23.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/opensciencearchive/osa-py"
+Repository = "https://github.com/opensciencearchive/osa-py"
+Issues = "https://github.com/opensciencearchive/osa-py/issues"
+
+[project.scripts]
+osa = "osa.cli.main:app"
+osa-run-hook = "osa.runtime.entrypoint:main"
+osa-run-ingester = "osa.runtime.ingester_entrypoint:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.1",
+    "ty>=0.0.17",
+]
