@@ -32,7 +32,6 @@ def convention(
             schema_type=schema,
             file_requirements=files,
             hooks=hooks,
-            ingester_type=ingester,
             ingester_info=ingester_info,
         )
     )

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +14,37 @@ import yaml
 
 class IngestionError(Exception):
     """Raised when an ingestion operation fails."""
+
+
+@dataclass
+class IngestableConvention:
+    """A convention that has an ingester attached."""
+
+    title: str
+    version: str
+    ingester_name: str
+
+
+def discover_ingestable_conventions() -> list[IngestableConvention]:
+    """Discover registered conventions that have an ingester.
+
+    Loads convention entry points, filters to those with an ingester.
+    Reusable by downstream CLIs.
+    """
+    for ep in importlib.metadata.entry_points(group="osa.conventions"):
+        importlib.import_module(ep.value)
+
+    from osa._registry import _conventions
+
+    return [
+        IngestableConvention(
+            title=conv.title,
+            version=conv.version,
+            ingester_name=conv.ingester_info.name,
+        )
+        for conv in _conventions
+        if conv.ingester_info is not None
+    ]
 
 
 def _read_domain(project_dir: Path) -> str:
@@ -45,23 +79,25 @@ def build_convention_srn(
 def start_ingestion(
     *,
     server: str,
-    convention_srn: str,
+    convention: str,
     token: str,
     batch_size: int = 1000,
     limit: int | None = None,
+    project_dir: Path | None = None,
     http: Any = None,
 ) -> dict[str, Any]:
     """Start an ingestion run for a convention.
 
-    POSTs to /api/v1/ingestions on the archive server.
-    The convention must have an ingester configured.
+    Accepts a convention title, builds the SRN internally,
+    and POSTs to /api/v1/ingestions on the archive server.
     """
     if http is None:
         http = httpx
 
+    srn = build_convention_srn(title=convention, project_dir=project_dir)
     url = f"{server.rstrip('/')}/api/v1/ingestions"
     payload: dict[str, Any] = {
-        "convention_srn": convention_srn,
+        "convention_srn": srn,
         "batch_size": batch_size,
     }
     if limit is not None:

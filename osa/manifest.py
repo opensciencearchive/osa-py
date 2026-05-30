@@ -156,9 +156,7 @@ def generate_manifest() -> Manifest:
             record_schema=c.schema_type.__name__,
             file_requirements=c.file_requirements,
             hook_names=[h.__name__ for h in c.hooks],
-            ingester_name=getattr(c.ingester_type, "name", None)
-            if c.ingester_type
-            else None,
+            ingester_name=c.ingester_info.name if c.ingester_info else None,
         )
         for c in _conventions
     ]

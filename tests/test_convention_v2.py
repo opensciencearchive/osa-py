@@ -47,7 +47,7 @@ class TestConventionVersion:
         )
         assert _conventions[0].version == "1.0.0"
 
-    def test_convention_stores_ingester_type(self) -> None:
+    def test_convention_stores_ingester_cls(self) -> None:
         from osa._registry import _conventions
         from osa.authoring.convention import convention
         from osa.authoring.hook import hook
@@ -84,7 +84,8 @@ class TestConventionVersion:
             files={"accepted_types": [".cif"]},
             hooks=[detect],
         )
-        assert _conventions[0].ingester_type is MyIngester
+        assert _conventions[0].ingester_info is not None
+        assert _conventions[0].ingester_info.ingester_cls is MyIngester
 
     def test_convention_populates_ingester_info(self) -> None:
         from osa._registry import _conventions
@@ -143,7 +144,6 @@ class TestConventionVersion:
             files={},
             hooks=[detect],
         )
-        assert _conventions[0].ingester_type is None
         assert _conventions[0].ingester_info is None
 
     def test_backward_compatible_without_version(self) -> None:
