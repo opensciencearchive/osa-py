@@ -47,7 +47,6 @@ class ConventionInfo:
     schema_type: type[MetadataSchema]
     file_requirements: dict[str, Any]
     hooks: list[types.FunctionType]
-    ingester_type: type | None = None
     ingester_info: IngesterInfo | None = None
 
 

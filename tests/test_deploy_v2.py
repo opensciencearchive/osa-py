@@ -68,7 +68,6 @@ class TestConventionToPayload:
                 "max_file_size": 1000,
             },
             hooks=[],
-            ingester_type=None,
             ingester_info=None,
         )
 
@@ -94,7 +93,6 @@ class TestConventionToPayload:
                 "max_file_size": 500,
             },
             hooks=[],
-            ingester_type=FakeIngester,
             ingester_info=ingester_info,
         )
 
@@ -124,7 +122,6 @@ class TestConventionToPayload:
             schema_type=FakeSchema,
             file_requirements={"accepted_types": [".csv"]},
             hooks=[],
-            ingester_type=None,
             ingester_info=None,
         )
 
@@ -132,7 +129,7 @@ class TestConventionToPayload:
         assert payload["ingester"] is None
 
     def test_ingester_none_when_no_ingester_image_provided(self) -> None:
-        """Even with an ingester_type, if no ingester_image tuple is given, ingester is None."""
+        """Even with ingester_info, if no ingester_image tuple is given, ingester is None."""
         from osa.cli.deploy import _convention_to_payload
 
         ingester_info = IngesterInfo(ingester_cls=FakeIngester, name="test-ingester")
@@ -143,7 +140,6 @@ class TestConventionToPayload:
             schema_type=FakeSchema,
             file_requirements={"accepted_types": [".cif"]},
             hooks=[],
-            ingester_type=FakeIngester,
             ingester_info=ingester_info,
         )
 
@@ -163,7 +159,6 @@ class TestConventionToPayload:
                 "max_file_size": 1000,
             },
             hooks=[],
-            ingester_type=None,
             ingester_info=None,
         )
 
@@ -201,7 +196,6 @@ class TestConventionToPayload:
                 "max_file_size": 1000,
             },
             hooks=[fake_hook],
-            ingester_type=None,
             ingester_info=None,
         )
 
@@ -300,7 +294,6 @@ class TestDeployEndToEnd:
                     "max_file_size": 500_000_000,
                 },
                 hooks=[fake_hook],
-                ingester_type=FakeIngester,
                 ingester_info=ingester_info,
             )
         )

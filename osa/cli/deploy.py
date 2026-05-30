@@ -304,21 +304,21 @@ def _convention_to_payload(
         file_reqs = {**file_reqs, "min_count": 0}
 
     ingester: dict[str, Any] | None = None
-    if ingester_image is not None and conv.ingester_type is not None:
+    if ingester_image is not None and conv.ingester_info is not None:
         image, digest = ingester_image
         config = None
-        if hasattr(conv.ingester_type, "RuntimeConfig"):
-            config = conv.ingester_type.RuntimeConfig().model_dump()  # type: ignore[union-attr]
+        ingester_cls = conv.ingester_info.ingester_cls
+        if hasattr(ingester_cls, "RuntimeConfig"):
+            config = ingester_cls.RuntimeConfig().model_dump()  # type: ignore[union-attr]
 
         schedule = None
         initial_run = None
-        if conv.ingester_info is not None:
-            if conv.ingester_info.schedule is not None:
-                schedule = conv.ingester_info.schedule.model_dump()
-            if conv.ingester_info.initial_run is not None:
-                initial_run = conv.ingester_info.initial_run.model_dump()
+        if conv.ingester_info.schedule is not None:
+            schedule = conv.ingester_info.schedule.model_dump()
+        if conv.ingester_info.initial_run is not None:
+            initial_run = conv.ingester_info.initial_run.model_dump()
 
-        ingester_limits = conv.ingester_info.limits if conv.ingester_info else None
+        ingester_limits = conv.ingester_info.limits
         ingester = {
             "image": image,
             "digest": digest,
