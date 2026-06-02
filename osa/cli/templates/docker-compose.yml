@@ -1,0 +1,93 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-osa}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 3s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  server:
+    platform: linux/amd64
+    image: ghcr.io/opensciencearchive/osa:${OSA_IMAGE_VERSION}
+    environment:
+      OSA_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-osa}
+      OSA_DATA_DIR: /data
+      OSA_HOST_DATA_DIR: ${PWD}/.data
+      OSA_CONFIG_FILE: /app/config.yaml
+      OSA_BASE_URL: ${OSA_BASE_URL:-http://localhost:8000}
+      OSA_LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
+      OSA_AUTH__JWT__SECRET: ${JWT_SECRET}
+      OSA_AUTH__PROVIDERS__ORCID__CLIENT_ID: ${ORCID_CLIENT_ID:-}
+      OSA_AUTH__PROVIDERS__ORCID__CLIENT_SECRET: ${ORCID_CLIENT_SECRET:-}
+      OSA_AUTH__PROVIDERS__ORCID__SANDBOX: ${ORCID_SANDBOX:-true}
+      OSA_AUTH__ADMINS__ORCID: ${ORCID_ADMINS:-[]}
+      OSA_AUTH__BASE_ROLE: DEPOSITOR
+      OSA_WORKER__HOOK_CONCURRENCY: "4"
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    depends_on:
+      db:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_healthy
+    volumes:
+      - ./osa.yaml:/app/config.yaml:ro
+      - ./.data:/data
+    networks:
+      - default
+      - docker-proxy
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2375/_ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  web:
+    image: ghcr.io/opensciencearchive/osa-web:${OSA_IMAGE_VERSION}
+    environment:
+      API_URL: http://server:8000
+    ports:
+      - "${WEB_PORT:-8080}:3000"
+    depends_on:
+      server:
+        condition: service_healthy
+    profiles:
+      - ui
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+  docker-proxy:
+    internal: true

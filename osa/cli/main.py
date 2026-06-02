@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
@@ -145,3 +146,116 @@ def deploy(
         skip_build=skip_build,
     )
     print(json.dumps(result, indent=2, default=str))
+
+
+@app.command(name="init")
+def init_cmd(
+    project_dir: Annotated[
+        Path,
+        typer.Argument(help="Directory to initialize (default: current directory)."),
+    ] = Path("."),
+    name: Annotated[
+        Optional[str],
+        typer.Option(help="Archive name (defaults to directory name)."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Overwrite existing configuration files."),
+    ] = False,
+) -> None:
+    """Initialize a new OSA archive project."""
+    from osa.cli.instance import InstanceError, init_project
+
+    try:
+        init_project(
+            project_dir=project_dir.resolve(),
+            name=name,
+            force=force,
+        )
+    except InstanceError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def start(
+    detach: Annotated[
+        bool,
+        typer.Option("--detach", "-d", help="Run in background."),
+    ] = True,
+    source: Annotated[
+        Optional[Path],
+        typer.Option("--source", help="Path to OSA server source for dev mode."),
+    ] = None,
+    with_ui: Annotated[
+        bool,
+        typer.Option("--with-ui", help="Start the web UI."),
+    ] = False,
+) -> None:
+    """Start the local OSA instance."""
+    from osa.cli.instance import InstanceError, start_instance
+
+    try:
+        start_instance(
+            project_dir=Path.cwd(),
+            detach=detach,
+            source=source.resolve() if source else None,
+            with_ui=with_ui,
+        )
+    except InstanceError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def stop() -> None:
+    """Stop the local OSA instance."""
+    from osa.cli.instance import InstanceError, stop_instance
+
+    try:
+        stop_instance(project_dir=Path.cwd())
+    except InstanceError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def logs(
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", "-f", help="Follow log output."),
+    ] = False,
+    service: Annotated[
+        Optional[str],
+        typer.Argument(help="Service name (e.g. server, db)."),
+    ] = None,
+    tail: Annotated[
+        Optional[int],
+        typer.Option("--tail", help="Number of lines to show from end."),
+    ] = None,
+) -> None:
+    """View logs from the local OSA instance."""
+    from osa.cli.instance import InstanceError, instance_logs
+
+    try:
+        instance_logs(
+            project_dir=Path.cwd(),
+            follow=follow,
+            service=service,
+            tail=tail,
+        )
+    except InstanceError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def status() -> None:
+    """Show status of the local OSA instance."""
+    from osa.cli.instance import InstanceError, instance_status
+
+    try:
+        instance_status(project_dir=Path.cwd())
+    except InstanceError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise typer.Exit(1) from None
