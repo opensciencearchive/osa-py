@@ -293,13 +293,13 @@ class TestWriteDevOverride:
         context = data["services"]["server"]["build"]["context"]
         assert context == str(source.resolve())
 
-    def test_sets_builder_target(self, tmp_path: Path) -> None:
+    def test_sets_dev_mode(self, tmp_path: Path) -> None:
         source = tmp_path / "server"
         source.mkdir()
         (tmp_path / ".osa").mkdir()
         path = _write_dev_override(source=source, project_dir=tmp_path)
         data = yaml.safe_load(path.read_text())
-        assert data["services"]["server"]["build"]["target"] == "builder"
+        assert data["services"]["server"]["environment"]["OSA_DEV_MODE"] == "true"
 
     def test_written_to_osa_dir(self, tmp_path: Path) -> None:
         source = tmp_path / "server"

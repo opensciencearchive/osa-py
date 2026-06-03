@@ -219,33 +219,10 @@ def _write_dev_override(*, source: Path, project_dir: Path) -> Path:
                 "build": {
                     "context": str(source_abs),
                     "dockerfile": "Dockerfile",
-                    "target": "builder",
                 },
                 "image": None,
-                "volumes": [
-                    f"{source_abs}:/app",
-                    "/app/.venv",
-                    "./osa.yaml:/app/config.yaml:ro",
-                    "./.data:/data",
-                ],
                 "environment": {
-                    "OSA_LOGGING__LEVEL": "${LOG_LEVEL:-DEBUG}",
                     "OSA_DEV_MODE": "true",
-                    "WATCHFILES_FORCE_POLLING": "true",
-                },
-                "entrypoint": [],
-                "command": ["/app/scripts/entrypoint.sh"],
-                "healthcheck": {
-                    "test": [
-                        "CMD",
-                        "curl",
-                        "--fail",
-                        "http://localhost:8000/api/v1/health",
-                    ],
-                    "interval": "10s",
-                    "timeout": "5s",
-                    "start_period": "30s",
-                    "retries": 3,
                 },
             }
         }
