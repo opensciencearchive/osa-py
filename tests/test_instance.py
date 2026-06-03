@@ -124,12 +124,6 @@ class TestInitProject:
         init_project(project_dir=project)
         assert (project / ".osa").is_dir()
 
-    def test_links_to_local_server(self, tmp_path: Path) -> None:
-        project = tmp_path / "archive"
-        init_project(project_dir=project)
-        config = json.loads((project / ".osa" / "config.json").read_text())
-        assert config["server"] == "http://127.0.0.1:8000"
-
     def test_creates_gitignore(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
         init_project(project_dir=project)
@@ -366,6 +360,14 @@ class TestStartInstance:
             mock_run.return_value.returncode = 0
             start_instance(project_dir=tmp_path)
         assert mock_run.call_args[1]["cwd"] == tmp_path
+
+    def test_links_to_local_server(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        with patch("osa.cli.instance.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            start_instance(project_dir=tmp_path)
+        config = json.loads((tmp_path / ".osa" / "config.json").read_text())
+        assert config["server"] == "http://127.0.0.1:8000"
 
 
 class TestStopInstance:
