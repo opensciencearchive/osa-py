@@ -219,8 +219,11 @@ def _write_dev_override(*, source: Path, project_dir: Path) -> Path:
                 "build": {
                     "context": str(source_abs),
                     "dockerfile": "Dockerfile",
+                    "target": "builder",
                 },
                 "image": None,
+                "entrypoint": [],
+                "command": ["/app/scripts/entrypoint.sh"],
                 "environment": {
                     "OSA_DEV_MODE": "true",
                 },
