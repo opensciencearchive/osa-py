@@ -148,6 +148,8 @@ def _build_compose_command(
         "compose",
         "--project-name",
         project_name,
+        "--project-directory",
+        str(project_dir),
         "-f",
         str(_compose_template_path()),
     ]
