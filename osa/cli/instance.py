@@ -33,7 +33,7 @@ def _read_project_name(project_dir: Path) -> str:
         raise InstanceError(
             "osa.yaml not found. Run `osa init` first or cd into your project directory."
         )
-    data = yaml.safe_load(config_path.read_text())
+    data = yaml.safe_load(config_path.read_text()) or {}
     name = data.get("name", project_dir.name)
     return re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")
 
