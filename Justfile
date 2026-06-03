@@ -35,3 +35,23 @@ clean:
 # Install in development mode
 dev:
     uv sync
+
+# Bump version and cut a GitHub release: just release patch|minor|major
+release bump:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    old=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    IFS='.' read -r major minor patch <<< "$old"
+    case "{{ bump }}" in
+        patch) patch=$((patch + 1)) ;;
+        minor) minor=$((minor + 1)); patch=0 ;;
+        major) major=$((major + 1)); minor=0; patch=0 ;;
+        *) echo "Usage: just release patch|minor|major"; exit 1 ;;
+    esac
+    new="${major}.${minor}.${patch}"
+    sed -i '' "s/^version = \"${old}\"/version = \"${new}\"/" pyproject.toml
+    git add pyproject.toml
+    git commit -m "chore: bump version from ${old} to ${new}"
+    git tag "v${new}"
+    git push && git push --tags
+    gh release create "v${new}" --title "v${new}" --generate-notes
