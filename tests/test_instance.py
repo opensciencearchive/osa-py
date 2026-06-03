@@ -309,6 +309,11 @@ class TestWriteDevOverride:
 
 
 class TestStartInstance:
+    @pytest.fixture(autouse=True)
+    def _mock_credentials(self):
+        with patch("osa.cli.credentials.write_credentials"):
+            yield
+
     def test_calls_docker_compose_up(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
         with patch("osa.cli.instance.subprocess.run") as mock_run:

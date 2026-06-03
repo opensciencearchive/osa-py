@@ -69,7 +69,7 @@ def _mint_dev_token() -> str:
     return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
 
 
-def _store_dev_credentials(project_dir: Path) -> None:
+def _store_dev_credentials() -> None:
     """Mint a dev token signed with the well-known dev secret, store it."""
     token = _mint_dev_token()
 
@@ -262,7 +262,7 @@ def start_instance(
     from osa.cli.link import write_link
 
     write_link("http://127.0.0.1:8000", project_dir=project_dir)
-    _store_dev_credentials(project_dir)
+    _store_dev_credentials()
 
     result = subprocess.run(args, cwd=project_dir, text=True)
     if result.returncode != 0:
