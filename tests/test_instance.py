@@ -59,9 +59,10 @@ class TestMintDevToken:
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        assert payload["sub"] == "dev-admin"
+        assert payload["sub"] == "00000000-0000-7000-8000-0000000000a1"
         assert payload["aud"] == "authenticated"
-        assert payload["provider"] == "dev"
+        assert payload["provider"] == "local"
+        assert payload["external_id"] == "admin@osa.local"
 
     def test_different_secrets_produce_different_tokens(self) -> None:
         t1 = _mint_dev_token("secret-a")

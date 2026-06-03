@@ -61,14 +61,17 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
+DEV_ADMIN_USER_ID = "00000000-0000-7000-8000-0000000000a1"
+
+
 def _mint_dev_token(jwt_secret: str) -> str:
     """Mint a long-lived dev JWT signed with the local instance's secret."""
     header = json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":"))
     payload = json.dumps(
         {
-            "sub": "dev-admin",
-            "provider": "dev",
-            "external_id": "dev-admin",
+            "sub": DEV_ADMIN_USER_ID,
+            "provider": "local",
+            "external_id": "admin@osa.local",
             "aud": "authenticated",
             "iat": int(time.time()),
             "exp": int(time.time()) + 86400 * 365,
