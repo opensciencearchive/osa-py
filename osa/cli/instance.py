@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import importlib.resources
+import json
 import re
 import secrets
 import subprocess
+import time
 from pathlib import Path
 
 import yaml
@@ -35,6 +40,64 @@ def _read_project_name(project_dir: Path) -> str:
     data = yaml.safe_load(config_path.read_text())
     name = data.get("name", project_dir.name)
     return re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env[key.strip()] = value.strip()
+    return env
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _mint_dev_token(jwt_secret: str) -> str:
+    """Mint a long-lived dev JWT signed with the local instance's secret."""
+    header = json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":"))
+    payload = json.dumps(
+        {
+            "sub": "dev-admin",
+            "provider": "dev",
+            "external_id": "dev-admin",
+            "aud": "authenticated",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 86400 * 365,
+            "jti": secrets.token_hex(16),
+        },
+        separators=(",", ":"),
+    )
+    header_b64 = _b64url(header.encode())
+    payload_b64 = _b64url(payload.encode())
+    message = f"{header_b64}.{payload_b64}".encode()
+    signature = hmac.new(jwt_secret.encode(), message, hashlib.sha256).digest()
+    return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
+
+
+def _store_dev_credentials(project_dir: Path) -> None:
+    """Read JWT_SECRET from .env, mint a dev token, store it in credentials."""
+    env = _parse_dotenv(project_dir / ".env")
+    jwt_secret = env.get("JWT_SECRET")
+    if not jwt_secret:
+        return
+    token = _mint_dev_token(jwt_secret)
+
+    from osa.cli.credentials import write_credentials
+
+    write_credentials(
+        "http://127.0.0.1:8000",
+        access_token=token,
+        refresh_token="dev-no-refresh",
+    )
 
 
 _ENV_TEMPLATE = """\
@@ -241,6 +304,7 @@ def start_instance(
     from osa.cli.link import write_link
 
     write_link("http://127.0.0.1:8000", project_dir=project_dir)
+    _store_dev_credentials(project_dir)
 
     result = subprocess.run(args, cwd=project_dir, text=True)
     if result.returncode != 0:

@@ -16,6 +16,8 @@ from osa.cli.instance import (
     _build_compose_command,
     _compose_template_path,
     _generate_secret,
+    _mint_dev_token,
+    _parse_dotenv,
     _read_project_name,
     _write_dev_override,
     init_project,
@@ -29,6 +31,42 @@ from osa.cli.instance import (
 def _write_osa_yaml(path: Path, name: str = "test-archive") -> None:
     (path / "osa.yaml").write_text(f'name: "{name}"\ndomain: "localhost"\n')
     (path / ".env").write_text("POSTGRES_PASSWORD=test\nJWT_SECRET=test\n")
+
+
+class TestParseDotenv:
+    def test_parses_key_value(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text("FOO=bar\nBAZ=qux\n")
+        assert _parse_dotenv(tmp_path / ".env") == {"FOO": "bar", "BAZ": "qux"}
+
+    def test_skips_comments_and_blanks(self, tmp_path: Path) -> None:
+        (tmp_path / ".env").write_text("# comment\n\nFOO=bar\n")
+        assert _parse_dotenv(tmp_path / ".env") == {"FOO": "bar"}
+
+    def test_returns_empty_for_missing_file(self, tmp_path: Path) -> None:
+        assert _parse_dotenv(tmp_path / ".env") == {}
+
+
+class TestMintDevToken:
+    def test_returns_three_part_jwt(self) -> None:
+        token = _mint_dev_token("test-secret")
+        parts = token.split(".")
+        assert len(parts) == 3
+
+    def test_token_has_correct_claims(self) -> None:
+        import base64
+
+        token = _mint_dev_token("test-secret")
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        assert payload["sub"] == "dev-admin"
+        assert payload["aud"] == "authenticated"
+        assert payload["provider"] == "dev"
+
+    def test_different_secrets_produce_different_tokens(self) -> None:
+        t1 = _mint_dev_token("secret-a")
+        t2 = _mint_dev_token("secret-b")
+        assert t1 != t2
 
 
 class TestHelpers:
@@ -368,6 +406,20 @@ class TestStartInstance:
             start_instance(project_dir=tmp_path)
         config = json.loads((tmp_path / ".osa" / "config.json").read_text())
         assert config["server"] == "http://127.0.0.1:8000"
+
+    def test_stores_dev_credentials(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        with (
+            patch("osa.cli.instance.subprocess.run") as mock_run,
+            patch("osa.cli.credentials.write_credentials") as mock_creds,
+        ):
+            mock_run.return_value.returncode = 0
+            start_instance(project_dir=tmp_path)
+        mock_creds.assert_called_once()
+        call_kwargs = mock_creds.call_args
+        assert call_kwargs[0][0] == "http://127.0.0.1:8000"
+        assert call_kwargs[1]["access_token"]
+        assert call_kwargs[1]["refresh_token"] == "dev-no-refresh"
 
 
 class TestStopInstance:
