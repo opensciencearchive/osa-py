@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import json
+
 import pytest
 import yaml
 
@@ -121,6 +123,12 @@ class TestInitProject:
         project = tmp_path / "archive"
         init_project(project_dir=project)
         assert (project / ".osa").is_dir()
+
+    def test_links_to_local_server(self, tmp_path: Path) -> None:
+        project = tmp_path / "archive"
+        init_project(project_dir=project)
+        config = json.loads((project / ".osa" / "config.json").read_text())
+        assert config["server"] == "http://127.0.0.1:8000"
 
     def test_creates_gitignore(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"

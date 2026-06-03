@@ -106,9 +106,13 @@ def init_project(
         )
     )
 
-    # Create directories
+    # Create directories and link to local server
     (project_dir / ".data").mkdir(exist_ok=True)
     (project_dir / ".osa").mkdir(exist_ok=True)
+
+    from osa.cli.link import write_link
+
+    write_link("http://127.0.0.1:8000", project_dir=project_dir)
 
     # Write or append .gitignore
     gitignore_path = project_dir / ".gitignore"

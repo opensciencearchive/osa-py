@@ -22,7 +22,7 @@ services:
       OSA_DATA_DIR: /data
       OSA_HOST_DATA_DIR: ${PWD}/.data
       OSA_CONFIG_FILE: /app/config.yaml
-      OSA_BASE_URL: ${OSA_BASE_URL:-http://localhost:8000}
+      OSA_BASE_URL: ${OSA_BASE_URL:-http://127.0.0.1:8000}
       OSA_LOGGING__LEVEL: ${LOG_LEVEL:-INFO}
       OSA_AUTH__JWT__SECRET: ${JWT_SECRET}
       OSA_AUTH__PROVIDERS__ORCID__CLIENT_ID: ${ORCID_CLIENT_ID:-}
