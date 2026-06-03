@@ -22,10 +22,6 @@ class InstanceError(Exception):
     """Raised when a local instance operation fails."""
 
 
-def _generate_secret(length: int = 32) -> str:
-    return secrets.token_urlsafe(length)
-
-
 def _compose_template_path() -> Path:
     ref = importlib.resources.files("osa.cli.templates").joinpath("docker-compose.yml")
     return Path(str(ref))
@@ -95,7 +91,7 @@ OSA_IMAGE_VERSION={image_version}
 
 # === Database ===
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD={postgres_password}
+POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION
 POSTGRES_DB=osa
 
 # === Logging ===
@@ -148,10 +144,7 @@ def init_project(
 
     # Write .env with generated secrets
     (project_dir / ".env").write_text(
-        _ENV_TEMPLATE.format(
-            image_version=OSA_IMAGE_VERSION,
-            postgres_password=_generate_secret(16),
-        )
+        _ENV_TEMPLATE.format(image_version=OSA_IMAGE_VERSION)
     )
 
     # Create directories

@@ -15,7 +15,6 @@ from osa.cli.instance import (
     InstanceError,
     _build_compose_command,
     _compose_template_path,
-    _generate_secret,
     _mint_dev_token,
     _read_project_name,
     _write_dev_override,
@@ -59,14 +58,6 @@ class TestMintDevToken:
 class TestHelpers:
     def test_image_version_is_pinned(self) -> None:
         assert OSA_IMAGE_VERSION == "v0.0.1"
-
-    def test_generate_secret_returns_nonempty_string(self) -> None:
-        secret = _generate_secret()
-        assert isinstance(secret, str)
-        assert len(secret) > 0
-
-    def test_generate_secret_is_unique(self) -> None:
-        assert _generate_secret() != _generate_secret()
 
     def test_compose_template_path_exists(self) -> None:
         path = _compose_template_path()
@@ -114,24 +105,12 @@ class TestInitProject:
         assert "JWT_SECRET=" in env
         assert "OSA_IMAGE_VERSION=" in env
 
-    def test_env_secrets_are_nonempty(self, tmp_path: Path) -> None:
+    def test_env_has_well_known_dev_secrets(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
         init_project(project_dir=project)
         env = (project / ".env").read_text()
-        for line in env.splitlines():
-            if "=" in line and not line.startswith("#"):
-                key, value = line.split("=", 1)
-                if key in ("POSTGRES_PASSWORD", "JWT_SECRET"):
-                    assert len(value) > 0
-
-    def test_env_secrets_are_unique_across_calls(self, tmp_path: Path) -> None:
-        p1 = tmp_path / "a"
-        p2 = tmp_path / "b"
-        init_project(project_dir=p1)
-        init_project(project_dir=p2)
-        env1 = (p1 / ".env").read_text()
-        env2 = (p2 / ".env").read_text()
-        assert env1 != env2
+        assert "POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION" in env
+        assert "JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION" in env
 
     def test_env_includes_image_version(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
