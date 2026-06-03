@@ -189,17 +189,11 @@ def _write_dev_override(*, source: Path, project_dir: Path) -> Path:
                 ],
                 "environment": {
                     "OSA_LOGGING__LEVEL": "${LOG_LEVEL:-DEBUG}",
+                    "OSA_DEV_MODE": "true",
                     "WATCHFILES_FORCE_POLLING": "true",
                 },
                 "entrypoint": [],
-                "command": (
-                    "sh -c '"
-                    "/app/.venv/bin/alembic upgrade head && "
-                    "/app/.venv/bin/python /app/scripts/seed.py && "
-                    "/app/.venv/bin/uvicorn osa.application.api.rest.app:app "
-                    "--host 0.0.0.0 --port 8000 --reload"
-                    "'"
-                ),
+                "command": ["/app/scripts/entrypoint.sh"],
                 "healthcheck": {
                     "test": [
                         "CMD",
