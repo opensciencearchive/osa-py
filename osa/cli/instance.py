@@ -42,30 +42,17 @@ def _read_project_name(project_dir: Path) -> str:
     return re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")
 
 
-def _parse_dotenv(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    if not path.exists():
-        return env
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env[key.strip()] = value.strip()
-    return env
-
-
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
 DEV_ADMIN_USER_ID = "00000000-0000-7000-8000-0000000000a1"
+DEV_JWT_SECRET = (
+    "osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION-not-suitable-for-real-use"
+)
 
 
-def _mint_dev_token(jwt_secret: str) -> str:
-    """Mint a long-lived dev JWT signed with the local instance's secret."""
+def _mint_dev_token() -> str:
     header = json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":"))
     payload = json.dumps(
         {
@@ -82,17 +69,13 @@ def _mint_dev_token(jwt_secret: str) -> str:
     header_b64 = _b64url(header.encode())
     payload_b64 = _b64url(payload.encode())
     message = f"{header_b64}.{payload_b64}".encode()
-    signature = hmac.new(jwt_secret.encode(), message, hashlib.sha256).digest()
+    signature = hmac.new(DEV_JWT_SECRET.encode(), message, hashlib.sha256).digest()
     return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
 
 
 def _store_dev_credentials(project_dir: Path) -> None:
-    """Read JWT_SECRET from .env, mint a dev token, store it in credentials."""
-    env = _parse_dotenv(project_dir / ".env")
-    jwt_secret = env.get("JWT_SECRET")
-    if not jwt_secret:
-        return
-    token = _mint_dev_token(jwt_secret)
+    """Mint a dev token signed with the well-known dev secret, store it."""
+    token = _mint_dev_token()
 
     from osa.cli.credentials import write_credentials
 
@@ -119,7 +102,7 @@ POSTGRES_DB=osa
 LOG_LEVEL=INFO
 
 # === Authentication ===
-JWT_SECRET={jwt_secret}
+JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION-not-suitable-for-real-use
 
 # ORCID credentials (register at https://orcid.org/developer-tools)
 ORCID_CLIENT_ID=
@@ -168,7 +151,6 @@ def init_project(
         _ENV_TEMPLATE.format(
             image_version=OSA_IMAGE_VERSION,
             postgres_password=_generate_secret(16),
-            jwt_secret=_generate_secret(32),
         )
     )
 

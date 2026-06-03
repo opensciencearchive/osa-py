@@ -17,7 +17,6 @@ from osa.cli.instance import (
     _compose_template_path,
     _generate_secret,
     _mint_dev_token,
-    _parse_dotenv,
     _read_project_name,
     _write_dev_override,
     init_project,
@@ -33,29 +32,16 @@ def _write_osa_yaml(path: Path, name: str = "test-archive") -> None:
     (path / ".env").write_text("POSTGRES_PASSWORD=test\nJWT_SECRET=test\n")
 
 
-class TestParseDotenv:
-    def test_parses_key_value(self, tmp_path: Path) -> None:
-        (tmp_path / ".env").write_text("FOO=bar\nBAZ=qux\n")
-        assert _parse_dotenv(tmp_path / ".env") == {"FOO": "bar", "BAZ": "qux"}
-
-    def test_skips_comments_and_blanks(self, tmp_path: Path) -> None:
-        (tmp_path / ".env").write_text("# comment\n\nFOO=bar\n")
-        assert _parse_dotenv(tmp_path / ".env") == {"FOO": "bar"}
-
-    def test_returns_empty_for_missing_file(self, tmp_path: Path) -> None:
-        assert _parse_dotenv(tmp_path / ".env") == {}
-
-
 class TestMintDevToken:
     def test_returns_three_part_jwt(self) -> None:
-        token = _mint_dev_token("test-secret")
+        token = _mint_dev_token()
         parts = token.split(".")
         assert len(parts) == 3
 
     def test_token_has_correct_claims(self) -> None:
         import base64
 
-        token = _mint_dev_token("test-secret")
+        token = _mint_dev_token()
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
@@ -64,9 +50,9 @@ class TestMintDevToken:
         assert payload["provider"] == "local"
         assert payload["external_id"] == "admin@osa.local"
 
-    def test_different_secrets_produce_different_tokens(self) -> None:
-        t1 = _mint_dev_token("secret-a")
-        t2 = _mint_dev_token("secret-b")
+    def test_tokens_have_unique_jti(self) -> None:
+        t1 = _mint_dev_token()
+        t2 = _mint_dev_token()
         assert t1 != t2
 
 
