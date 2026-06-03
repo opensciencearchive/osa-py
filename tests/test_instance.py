@@ -31,7 +31,7 @@ def _write_osa_yaml(path: Path, name: str = "test-archive") -> None:
 
 class TestHelpers:
     def test_image_version_is_pinned(self) -> None:
-        assert OSA_IMAGE_VERSION == "0.0.1"
+        assert OSA_IMAGE_VERSION == "v0.0.1"
 
     def test_generate_secret_returns_nonempty_string(self) -> None:
         secret = _generate_secret()

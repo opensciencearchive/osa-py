@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-OSA_IMAGE_VERSION = "0.0.1"
+OSA_IMAGE_VERSION = "v0.0.1"
 
 
 class InstanceError(Exception):
