@@ -214,6 +214,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Example fixtures (large data files)
+examples/fixtures/
+
 # Docker
 .docker/
 

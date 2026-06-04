@@ -27,10 +27,11 @@ from pydantic import BaseModel
 from osa import Schema, Field, Record, Reject, hook, convention
 
 # 1. Define the metadata schema
-class PDBStructure(Schema, id="pdb-structure"):
+class PDBStructure(Schema):
+    __schema_id__ = "pdb-structure"
+
     pdb_id: str
     title: str
-    organism: str
     method: str
     resolution: float | None = Field(default=None, unit="Å")
     deposition_date: date
@@ -54,8 +55,8 @@ class Pocket(BaseModel):
 @hook
 def find_pockets(record: Record[PDBStructure]) -> list[Pocket]:
     cif = record.files["structure.cif"]
-    # ... run analysis on the file ...
-    return [Pocket(pocket_id=0, score=0.95, volume=123.4)]
+    size_kb = cif.size / 1024
+    return [Pocket(pocket_id=0, score=round(size_kb / 100, 2), volume=size_kb)]
 
 # 4. Register the convention
 convention(
@@ -79,21 +80,30 @@ my_convention = "my_package"
 Test hooks in-process without Docker:
 
 ```python
+from pathlib import Path
+from osa import Reject
 from osa.testing import run_hook
 
-run_hook(
-    validate_structure,
-    meta={
-        "pdb_id": "4TOS",
-        "title": "Thermolysin",
-        "organism": "Bacillus thermoproteolyticus",
-        "method": "X-RAY DIFFRACTION",
-        "resolution": 1.65,
-        "deposition_date": "1982-06-14",
-        "molecular_weight": 34.6,
-        "chain_count": 1,
-    },
-)
+meta = {
+    "pdb_id": "4TOS",
+    "title": "Crystal structure of Tankyrase 1 with 355",
+    "method": "X-RAY DIFFRACTION",
+    "resolution": 1.8,
+    "deposition_date": "2014-06-06",
+    "molecular_weight": 54.44,
+    "chain_count": 1,
+}
+
+# Passes validation
+run_hook(validate_structure, meta=meta, files=Path("fixtures/4TOS"))
+
+# Raises Reject for low resolution
+run_hook(validate_structure, meta={**meta, "resolution": 5.0}, files=Path("fixtures/4TOS"))
+# => Reject: Resolution too low for reliable analysis
+
+# Returns extracted features
+pockets = run_hook(find_pockets, meta=meta, files=Path("fixtures/4TOS"))
+assert len(pockets) > 0
 ```
 
 ## Local development
