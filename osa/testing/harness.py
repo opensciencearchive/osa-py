@@ -6,12 +6,14 @@ import asyncio
 import tempfile
 import types
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from osa._registry import _hooks
+from osa.authoring.ingester import Ingester
+from osa.runtime.ingester_context import IngesterContext
 from osa.types.files import FileCollection
 from osa.types.ingester import IngesterRecord
 from osa.types.record import Record
@@ -73,17 +75,16 @@ def run_hook(
     return fn(record)
 
 
-@dataclass
+@dataclass(frozen=True)
 class IngesterResult:
     ingester_name: str
     records: list[IngesterRecord]
     files_dir: Path
-    _temp_dir: tempfile.TemporaryDirectory[str] | None = field(default=None, repr=False)
 
 
 async def _run_ingester_async(
-    ingester: Any,
-    ctx: Any,
+    ingester: Ingester,
+    ctx: IngesterContext,
     *,
     limit: int | None,
     since: datetime | None,
@@ -101,7 +102,7 @@ async def _run_ingester_async(
 
 
 def run_ingester(
-    ingester_cls: type,
+    ingester_cls: type[Ingester],
     *,
     limit: int | None = None,
     config: dict[str, Any] | None = None,
@@ -114,34 +115,28 @@ def run_ingester(
     Creates an IngesterContext, calls pull(), and collects all yielded records.
     Files are downloaded to files_dir (or a temp directory if not provided).
     """
-    from osa.runtime.ingester_context import IngesterContext
+    resolved_files_dir = Path(tempfile.mkdtemp()) if files_dir is None else files_dir
 
-    temp_dir: tempfile.TemporaryDirectory[str] | None = None
-    if files_dir is None:
-        temp_dir = tempfile.TemporaryDirectory()
-        files_dir = Path(temp_dir.name)
+    with tempfile.TemporaryDirectory() as output_dir:
+        ingester_name = getattr(ingester_cls, "name", ingester_cls.__name__)
 
-    output_temp = tempfile.TemporaryDirectory()
-    output_dir = Path(output_temp.name)
+        runtime_config_cls = getattr(ingester_cls, "RuntimeConfig", None)
+        if config is not None and runtime_config_cls is not None:
+            validated = runtime_config_cls(**config)
+            ingester = ingester_cls(validated)
+        else:
+            ingester = ingester_cls()
 
-    ingester_name = getattr(ingester_cls, "name", ingester_cls.__name__)
+        ctx = IngesterContext(files_dir=resolved_files_dir, output_dir=Path(output_dir))
 
-    runtime_config_cls = getattr(ingester_cls, "RuntimeConfig", None)
-    if config is not None and runtime_config_cls is not None:
-        validated = runtime_config_cls(**config)
-        ingester = ingester_cls(validated)
-    else:
-        ingester = ingester_cls()
-
-    ctx = IngesterContext(files_dir=files_dir, output_dir=output_dir)
-
-    records = asyncio.run(
-        _run_ingester_async(ingester, ctx, limit=limit, since=since, session=session)
-    )
+        records = asyncio.run(
+            _run_ingester_async(
+                ingester, ctx, limit=limit, since=since, session=session
+            )
+        )
 
     return IngesterResult(
         ingester_name=ingester_name,
         records=records,
-        files_dir=files_dir,
-        _temp_dir=temp_dir,
+        files_dir=resolved_files_dir,
     )

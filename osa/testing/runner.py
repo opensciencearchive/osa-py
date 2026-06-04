@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +42,7 @@ class TestResult:
 
 
 def _run_hooks_for_record(
-    hooks: list[Any],
+    hooks: list[types.FunctionType],
     *,
     meta: dict[str, Any],
     files_dir: Path,

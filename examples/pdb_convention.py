@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 
-import httpx
 from pydantic import BaseModel
 
 from osa import (
@@ -73,48 +72,55 @@ class PDBIngester:
         offset=0,
         session=None,
     ):
+        import httpx
+
         ids = PDB_IDS[offset:]
         if limit is not None:
             ids = ids[:limit]
 
-        for pdb_id in ids:
-            entry = httpx.get(f"{RCSB_DATA}/{pdb_id}").raise_for_status().json()
+        async with httpx.AsyncClient() as client:
+            for pdb_id in ids:
+                resp = await client.get(f"{RCSB_DATA}/{pdb_id}")
+                resp.raise_for_status()
+                entry = resp.json()
 
-            struct = entry.get("struct", {})
-            exptl = entry.get("exptl", [{}])[0]
-            cell = entry.get("cell", {})
-            diffrn = entry.get("rcsb_entry_info", {})
+                struct = entry.get("struct", {})
+                exptl = entry.get("exptl", [{}])[0]
+                cell = entry.get("cell", {})
+                diffrn = entry.get("rcsb_entry_info", {})
 
-            resolution = None
-            for key in ("ls_d_res_high", "resolution_combined"):
-                val = diffrn.get(key)
-                if val is not None:
-                    resolution = float(val[0]) if isinstance(val, list) else float(val)
-                    break
+                resolution = None
+                for key in ("ls_d_res_high", "resolution_combined"):
+                    val = diffrn.get(key)
+                    if val is not None:
+                        resolution = (
+                            float(val[0]) if isinstance(val, list) else float(val)
+                        )
+                        break
 
-            dep_date = entry.get("rcsb_accession_info", {}).get(
-                "deposit_date", "1970-01-01"
-            )[:10]
+                dep_date = entry.get("rcsb_accession_info", {}).get(
+                    "deposit_date", "1970-01-01"
+                )[:10]
 
-            file_ref = await ctx.add_file(
-                pdb_id,
-                "structure.cif",
-                url=f"{RCSB_FILES}/{pdb_id}.cif",
-            )
+                file_ref = await ctx.add_file(
+                    pdb_id,
+                    "structure.cif",
+                    url=f"{RCSB_FILES}/{pdb_id}.cif",
+                )
 
-            yield IngesterRecord(
-                source_id=pdb_id,
-                metadata={
-                    "pdb_id": pdb_id,
-                    "title": struct.get("title", ""),
-                    "method": exptl.get("method", ""),
-                    "resolution": resolution,
-                    "deposition_date": dep_date,
-                    "molecular_weight": cell.get("formula_weight", 0.0),
-                    "chain_count": diffrn.get("polymer_entity_count_protein", 1),
-                },
-                files=[file_ref],
-            )
+                yield IngesterRecord(
+                    source_id=pdb_id,
+                    metadata={
+                        "pdb_id": pdb_id,
+                        "title": struct.get("title", ""),
+                        "method": exptl.get("method", ""),
+                        "resolution": resolution,
+                        "deposition_date": dep_date,
+                        "molecular_weight": cell.get("formula_weight", 0.0),
+                        "chain_count": diffrn.get("polymer_entity_count_protein", 1),
+                    },
+                    files=[file_ref],
+                )
 
 
 convention(

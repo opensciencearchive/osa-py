@@ -326,19 +326,14 @@ def test_cmd(
 
     _print_test_result(result)
 
-    all_accepted = all(r.accepted for r in result.records)
     if not result.records:
         raise typer.Exit(1)
-    if not all_accepted:
-        raise typer.Exit(0)
 
 
 def _print_test_result(result: TestResult) -> None:
-    print(f"\nRunning ingester {result.ingester_name}...")
     ids = ", ".join(r.source_id for r in result.records)
-    print(f"  Fetched {len(result.records)} record(s) ({ids})")
-
-    print("\nRunning hooks...\n")
+    print(f"\nIngester {result.ingester_name}: {len(result.records)} record(s) ({ids})")
+    print()
 
     for record in result.records:
         print(f"  {record.source_id}")

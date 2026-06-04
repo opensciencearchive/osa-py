@@ -74,11 +74,10 @@ class TestRunTest:
                     {"source_id": "R2", "title": "Second", "score": 0.1},
                 ]
                 for item in data[:limit]:
-                    file_ref = await ctx.add_bytes(
-                        item["source_id"], "data.txt", data=b"test"
-                    )
+                    source_id = str(item["source_id"])
+                    file_ref = await ctx.add_bytes(source_id, "data.txt", data=b"test")
                     yield IngesterRecord(
-                        source_id=item["source_id"],
+                        source_id=source_id,
                         metadata={"title": item["title"], "score": item["score"]},
                         files=[file_ref],
                     )
@@ -175,6 +174,7 @@ class TestRunTest:
         result = run_test(convention_info=conv, limit=1)
         hooks = result.records[0].hooks
         assert hooks[0].status == "error"
+        assert hooks[0].reason is not None
         assert "crash" in hooks[0].reason
         assert hooks[1].status == "skipped"
 
