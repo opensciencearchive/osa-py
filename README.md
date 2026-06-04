@@ -120,12 +120,6 @@ osa start
 
 This scaffolds a project directory with `osa.yaml`, `.env`, and a Docker Compose stack (Postgres, OSA server, docker-socket-proxy). Authentication is handled automatically — `osa start` mints a dev JWT so `osa deploy` and `osa ingestion start` work immediately.
 
-To build the server from a local checkout instead of pulling the published image:
-
-```bash
-osa start --source ../path/to/server
-```
-
 ## Deploy
 
 Deploy conventions to a running archive:
