@@ -14,7 +14,7 @@ The developer toolkit for the [Open Science Archive](https://github.com/openscie
 ## Install
 
 ```bash
-pip install osa
+pip install osa-py
 ```
 
 ## Quickstart
