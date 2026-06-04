@@ -46,7 +46,7 @@ class Pocket(BaseModel):
 
 @hook
 def find_pockets(record: Record[PDBStructure]) -> list[Pocket]:
-    cif = record.files["structure.cif"]
+    cif = record.files.glob("*.cif")[0]
     size_kb = cif.size / 1024
     return [Pocket(pocket_id=0, score=round(size_kb / 100, 2), volume=size_kb)]
 
