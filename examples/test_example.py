@@ -1,58 +1,96 @@
-"""Run the example hooks against a real PDB structure."""
+"""Test the PDB convention: unit tests with run_hook, integration with run_test."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
 from osa import Reject
-from osa.testing import run_hook
+from osa.testing import run_hook, run_ingester, run_test
 
-from pdb_convention import find_pockets, validate_structure
-
-META = {
-    "pdb_id": "4TOS",
-    "title": "Crystal structure of Tankyrase 1 with 355",
-    "method": "X-RAY DIFFRACTION",
-    "resolution": 1.8,
-    "deposition_date": "2014-06-06",
-    "molecular_weight": 54.44,
-    "chain_count": 1,
-}
-
-FIXTURES = Path(__file__).parent / "fixtures" / "4TOS"
+from pdb_convention import PDBIngester, validate_structure
 
 
-def test_valid_structure_passes():
-    run_hook(validate_structure, meta=META, files=FIXTURES)
+# --- Unit tests: test individual hooks with synthetic data ---
 
 
-def test_low_resolution_rejected():
-    bad = {**META, "resolution": 5.0}
+def test_valid_structure_passes(tmp_path):
+    (tmp_path / "structure.cif").write_text("data_test")
+    run_hook(
+        validate_structure,
+        meta={
+            "pdb_id": "TEST",
+            "title": "Test structure",
+            "method": "X-RAY DIFFRACTION",
+            "resolution": 1.8,
+            "deposition_date": "2024-01-01",
+            "molecular_weight": 50.0,
+            "chain_count": 1,
+        },
+        files=tmp_path,
+    )
+
+
+def test_low_resolution_rejected(tmp_path):
+    (tmp_path / "structure.cif").write_text("data_test")
     with pytest.raises(Reject, match="Resolution too low"):
-        run_hook(validate_structure, meta=bad, files=FIXTURES)
+        run_hook(
+            validate_structure,
+            meta={
+                "pdb_id": "TEST",
+                "title": "Test structure",
+                "method": "X-RAY DIFFRACTION",
+                "resolution": 5.0,
+                "deposition_date": "2024-01-01",
+                "molecular_weight": 50.0,
+                "chain_count": 1,
+            },
+            files=tmp_path,
+        )
 
 
-def test_find_pockets_returns_results():
-    result = run_hook(find_pockets, meta=META, files=FIXTURES)
-    assert len(result) > 0
-    assert result[0].pocket_id == 0
-    assert result[0].volume > 0
+def test_missing_cif_rejected(tmp_path):
+    with pytest.raises(Reject, match="CIF file"):
+        run_hook(
+            validate_structure,
+            meta={
+                "pdb_id": "TEST",
+                "title": "Test structure",
+                "method": "X-RAY DIFFRACTION",
+                "resolution": 1.8,
+                "deposition_date": "2024-01-01",
+                "molecular_weight": 50.0,
+                "chain_count": 1,
+            },
+            files=tmp_path,
+        )
 
 
-if __name__ == "__main__":
-    from osa import Reject  # noqa: F811
+# --- Integration: test the ingester pulls real data ---
 
-    run_hook(validate_structure, meta=META, files=FIXTURES)
-    print("PASS: valid structure accepted")
 
-    try:
-        run_hook(validate_structure, meta={**META, "resolution": 5.0}, files=FIXTURES)
-        assert False, "Should have rejected"
-    except Reject:
-        print("PASS: low resolution rejected")
+@pytest.mark.network
+def test_ingester_fetches_records():
+    result = run_ingester(PDBIngester, limit=1)
+    assert len(result.records) == 1
+    assert result.records[0].source_id == "4TOS"
+    assert (result.files_dir / "4TOS" / "structure.cif").exists()
 
-    result = run_hook(find_pockets, meta=META, files=FIXTURES)
-    assert len(result) > 0
-    print(f"PASS: found {len(result)} pocket(s)")
+
+# --- End-to-end: test the full convention pipeline ---
+
+
+@pytest.mark.network
+def test_full_convention_pipeline():
+    from osa._registry import _conventions
+
+    conv = next(c for c in _conventions if c.title == "Protein Structures")
+    result = run_test(convention_info=conv, limit=1)
+
+    assert len(result.records) == 1
+    record = result.records[0]
+    assert record.accepted
+    assert record.hooks[0].hook_name == "validate_structure"
+    assert record.hooks[0].status == "passed"
+    assert record.hooks[1].hook_name == "find_pockets"
+    assert record.hooks[1].status == "passed"
+    assert len(record.hooks[1].result) > 0

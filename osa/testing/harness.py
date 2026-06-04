@@ -1,15 +1,19 @@
-"""Test harness for running hooks in-process."""
+"""Test harness for running hooks and ingesters in-process."""
 
 from __future__ import annotations
 
+import asyncio
+import tempfile
 import types
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from osa._registry import _hooks
 from osa.types.files import FileCollection
+from osa.types.ingester import IngesterRecord
 from osa.types.record import Record
 from osa.types.schema import MetadataSchema
 
@@ -67,3 +71,77 @@ def run_hook(
     """
     record = _build_record(fn, meta, files, srn=srn)
     return fn(record)
+
+
+@dataclass
+class IngesterResult:
+    ingester_name: str
+    records: list[IngesterRecord]
+    files_dir: Path
+    _temp_dir: tempfile.TemporaryDirectory[str] | None = field(default=None, repr=False)
+
+
+async def _run_ingester_async(
+    ingester: Any,
+    ctx: Any,
+    *,
+    limit: int | None,
+    since: datetime | None,
+    session: dict[str, Any] | None,
+) -> list[IngesterRecord]:
+    try:
+        records: list[IngesterRecord] = []
+        async for record in ingester.pull(
+            ctx=ctx, since=since, limit=limit, offset=0, session=session
+        ):
+            records.append(record)
+        return records
+    finally:
+        await ctx.close()
+
+
+def run_ingester(
+    ingester_cls: type,
+    *,
+    limit: int | None = None,
+    config: dict[str, Any] | None = None,
+    since: datetime | None = None,
+    session: dict[str, Any] | None = None,
+    files_dir: Path | None = None,
+) -> IngesterResult:
+    """Run an ingester in-process for testing.
+
+    Creates an IngesterContext, calls pull(), and collects all yielded records.
+    Files are downloaded to files_dir (or a temp directory if not provided).
+    """
+    from osa.runtime.ingester_context import IngesterContext
+
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    if files_dir is None:
+        temp_dir = tempfile.TemporaryDirectory()
+        files_dir = Path(temp_dir.name)
+
+    output_temp = tempfile.TemporaryDirectory()
+    output_dir = Path(output_temp.name)
+
+    ingester_name = getattr(ingester_cls, "name", ingester_cls.__name__)
+
+    runtime_config_cls = getattr(ingester_cls, "RuntimeConfig", None)
+    if config is not None and runtime_config_cls is not None:
+        validated = runtime_config_cls(**config)
+        ingester = ingester_cls(validated)
+    else:
+        ingester = ingester_cls()
+
+    ctx = IngesterContext(files_dir=files_dir, output_dir=output_dir)
+
+    records = asyncio.run(
+        _run_ingester_async(ingester, ctx, limit=limit, since=since, session=session)
+    )
+
+    return IngesterResult(
+        ingester_name=ingester_name,
+        records=records,
+        files_dir=files_dir,
+        _temp_dir=temp_dir,
+    )

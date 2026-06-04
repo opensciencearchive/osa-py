@@ -23,8 +23,12 @@ A convention defines what data your archive accepts. Here's an example that arch
 
 ```python
 from datetime import date
+import httpx
 from pydantic import BaseModel
-from osa import Schema, Field, Record, Reject, hook, convention
+from osa import (
+    Schema, Field, Record, Reject, hook, convention,
+    IngesterContext, IngesterRecord,
+)
 
 # 1. Define the metadata schema
 class PDBStructure(Schema):
@@ -58,11 +62,32 @@ def find_pockets(record: Record[PDBStructure]) -> list[Pocket]:
     size_kb = cif.size / 1024
     return [Pocket(pocket_id=0, score=round(size_kb / 100, 2), volume=size_kb)]
 
-# 4. Register the convention
+# 4. Pull records from an external source
+class PDBIngester:
+    name = "pdb-rcsb"
+    schedule = None
+    initial_run = None
+    max_file_mb = 50.0
+
+    async def pull(self, *, ctx: IngesterContext, limit=None, **kwargs):
+        for pdb_id in ["4TOS", "1TIM", "6LU7"][:limit]:
+            entry = httpx.get(f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id}").json()
+            file_ref = await ctx.add_file(
+                pdb_id, "structure.cif",
+                url=f"https://files.rcsb.org/download/{pdb_id}.cif",
+            )
+            yield IngesterRecord(
+                source_id=pdb_id,
+                metadata={"pdb_id": pdb_id, "title": entry["struct"]["title"], ...},
+                files=[file_ref],
+            )
+
+# 5. Register the convention
 convention(
     title="Protein Structures",
     version="1.0.0",
     schema=PDBStructure,
+    ingester=PDBIngester,
     hooks=[validate_structure, find_pockets],
     files={"accepted_types": [".cif", ".pdb"], "max_count": 5},
 )
@@ -77,33 +102,35 @@ my_convention = "my_package"
 
 ## Testing
 
-Test hooks in-process without Docker:
+Test the full convention pipeline end-to-end — the ingester pulls real data, then every hook runs against each record:
+
+```bash
+osa test --limit 2
+```
+
+```
+Running ingester pdb-rcsb...
+  Fetched 2 record(s) (4TOS, 1TIM)
+
+Running hooks...
+
+  4TOS
+    ✓ validate_structure
+    ✓ find_pockets → 1 Pocket(s)
+
+  1TIM
+    ✓ validate_structure
+    ✓ find_pockets → 1 Pocket(s)
+
+2 record(s), 2 accepted, 0 rejected
+```
+
+You can also test individual hooks in-process with synthetic data:
 
 ```python
-from pathlib import Path
-from osa import Reject
 from osa.testing import run_hook
 
-meta = {
-    "pdb_id": "4TOS",
-    "title": "Crystal structure of Tankyrase 1 with 355",
-    "method": "X-RAY DIFFRACTION",
-    "resolution": 1.8,
-    "deposition_date": "2014-06-06",
-    "molecular_weight": 54.44,
-    "chain_count": 1,
-}
-
-# Passes validation
-run_hook(validate_structure, meta=meta, files=Path("fixtures/4TOS"))
-
-# Raises Reject for low resolution
-run_hook(validate_structure, meta={**meta, "resolution": 5.0}, files=Path("fixtures/4TOS"))
-# => Reject: Resolution too low for reliable analysis
-
-# Returns extracted features
-pockets = run_hook(find_pockets, meta=meta, files=Path("fixtures/4TOS"))
-assert len(pockets) > 0
+run_hook(validate_structure, meta={"pdb_id": "TEST", ...}, files=tmp_path)
 ```
 
 ## Local development
@@ -144,6 +171,7 @@ This builds OCI images for your hooks and ingesters, pushes them to the server's
 
 | Command | Description |
 |---|---|
+| `osa test [--limit N]` | Test the full pipeline: ingester → hooks |
 | `osa deploy` | Build OCI images and register conventions |
 | `osa meta` | Print the convention manifest as JSON |
 | `osa ingestion start` | Trigger an ingestion run |

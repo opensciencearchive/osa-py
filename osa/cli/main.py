@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
+
+if TYPE_CHECKING:
+    from osa.testing.runner import TestResult
 
 import typer
 
@@ -259,3 +262,110 @@ def status() -> None:
     except InstanceError as e:
         print(f"Error: {e}", file=sys.stderr)
         raise typer.Exit(1) from None
+
+
+@app.command("test")
+def test_cmd(
+    limit: Annotated[
+        int,
+        typer.Option(help="Max records to pull from the ingester."),
+    ] = 1,
+    convention: Annotated[
+        Optional[str],
+        typer.Option(
+            "--convention", help="Convention title. Auto-detected if omitted."
+        ),
+    ] = None,
+) -> None:
+    """Test a convention end-to-end: run the ingester, then all hooks."""
+    import importlib
+    import importlib.metadata
+
+    from osa._registry import _conventions
+    from osa.testing.runner import TestError, run_test
+
+    for ep in importlib.metadata.entry_points(group="osa.conventions"):
+        importlib.import_module(ep.value)
+
+    candidates = [c for c in _conventions if c.ingester_info is not None]
+
+    if not candidates:
+        print("Error: No conventions with an ingester found.", file=sys.stderr)
+        raise typer.Exit(1)
+
+    if convention:
+        matched = [c for c in candidates if c.title == convention]
+        if not matched:
+            print(f"Error: Convention '{convention}' not found.", file=sys.stderr)
+            raise typer.Exit(1)
+        conv = matched[0]
+    elif len(candidates) == 1:
+        conv = candidates[0]
+        assert conv.ingester_info is not None
+        typer.confirm(
+            f"Test {conv.title}@{conv.version} (ingester: {conv.ingester_info.name})?",
+            abort=True,
+        )
+    else:
+        print("Multiple conventions found:\n")
+        for i, c in enumerate(candidates, 1):
+            assert c.ingester_info is not None
+            print(f"  {i}. {c.title}@{c.version} (ingester: {c.ingester_info.name})")
+        print()
+        choice = typer.prompt("Select a convention", type=int)
+        if choice < 1 or choice > len(candidates):
+            print("Error: Invalid selection.", file=sys.stderr)
+            raise typer.Exit(1)
+        conv = candidates[choice - 1]
+
+    try:
+        result = run_test(convention_info=conv, limit=limit)
+    except TestError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise typer.Exit(1) from None
+
+    _print_test_result(result)
+
+    all_accepted = all(r.accepted for r in result.records)
+    if not result.records:
+        raise typer.Exit(1)
+    if not all_accepted:
+        raise typer.Exit(0)
+
+
+def _print_test_result(result: TestResult) -> None:
+    print(f"\nRunning ingester {result.ingester_name}...")
+    ids = ", ".join(r.source_id for r in result.records)
+    print(f"  Fetched {len(result.records)} record(s) ({ids})")
+
+    print("\nRunning hooks...\n")
+
+    for record in result.records:
+        print(f"  {record.source_id}")
+        for hook_outcome in record.hooks:
+            if hook_outcome.status == "passed":
+                detail = _format_result(hook_outcome.result)
+                suffix = f" → {detail}" if detail else ""
+                print(f"    ✓ {hook_outcome.hook_name}{suffix}")
+            elif hook_outcome.status == "rejected":
+                print(f"    ✗ {hook_outcome.hook_name} → Reject: {hook_outcome.reason}")
+            elif hook_outcome.status == "error":
+                print(f"    ✗ {hook_outcome.hook_name} → Error: {hook_outcome.reason}")
+            elif hook_outcome.status == "skipped":
+                print(f"    - {hook_outcome.hook_name} (skipped)")
+        print()
+
+    accepted = sum(1 for r in result.records if r.accepted)
+    rejected = len(result.records) - accepted
+    print(f"{len(result.records)} record(s), {accepted} accepted, {rejected} rejected")
+
+
+def _format_result(result: object) -> str:
+    if result is None:
+        return ""
+    if isinstance(result, list):
+        if not result:
+            return "0 results"
+        type_name = type(result[0]).__name__
+        return f"{len(result)} {type_name}(s)"
+    return type(result).__name__
