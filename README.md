@@ -19,12 +19,12 @@ pip install osa-py
 
 ## Quickstart
 
-A convention defines what data your archive accepts. Here's a stripped-down example that archives protein structures from the RCSB PDB and detects binding pockets:
+A convention defines what data your archive accepts. Here's an example that archives protein structures and runs analysis on the deposited files:
 
 ```python
 from datetime import date
 from pydantic import BaseModel
-from osa import Schema, Field, Record, Reject, hook, convention, Ingester
+from osa import Schema, Field, Record, Reject, hook, convention
 
 # 1. Define the metadata schema
 class PDBStructure(Schema, id="pdb-structure"):
@@ -37,43 +37,32 @@ class PDBStructure(Schema, id="pdb-structure"):
     molecular_weight: float = Field(unit="kDa")
     chain_count: int
 
-# 2. Define hook output
+# 2. Validate incoming records
+@hook
+def validate_structure(record: Record[PDBStructure]) -> None:
+    if record.metadata.resolution and record.metadata.resolution > 4.0:
+        raise Reject("Resolution too low for reliable analysis")
+    if not record.files.glob("*.cif"):
+        raise Reject("At least one CIF file is required")
+
+# 3. Extract features from the data
 class Pocket(BaseModel):
     pocket_id: int
     score: float
     volume: float
-    center_x: float
-    center_y: float
-    center_z: float
 
-# 3. Write a hook
 @hook
-def pockets(record: Record[PDBStructure]) -> list[Pocket]:
-    """Detect binding pockets in a protein structure."""
-    import pocketeer as pt
-
+def find_pockets(record: Record[PDBStructure]) -> list[Pocket]:
     cif = record.files["structure.cif"]
-    atoms = pt.load_structure(str(cif.path))
-    found = pt.find_pockets(atoms)
-
-    return [
-        Pocket(
-            pocket_id=i,
-            score=p.score,
-            volume=p.volume,
-            center_x=float(p.centroid[0]),
-            center_y=float(p.centroid[1]),
-            center_z=float(p.centroid[2]),
-        )
-        for i, p in enumerate(found)
-    ]
+    # ... run analysis on the file ...
+    return [Pocket(pocket_id=0, score=0.95, volume=123.4)]
 
 # 4. Register the convention
 convention(
-    title="RCSB PDB Protein Structures",
+    title="Protein Structures",
     version="1.0.0",
     schema=PDBStructure,
-    hooks=[pockets],
+    hooks=[validate_structure, find_pockets],
     files={"accepted_types": [".cif", ".pdb"], "max_count": 5},
 )
 ```
@@ -82,7 +71,7 @@ Register the convention as a setuptools entry point in `pyproject.toml`:
 
 ```toml
 [project.entry-points."osa.conventions"]
-pockets = "pockets"
+my_convention = "my_package"
 ```
 
 ## Testing
@@ -92,8 +81,8 @@ Test hooks in-process without Docker:
 ```python
 from osa.testing import run_hook
 
-result = run_hook(
-    pockets,
+run_hook(
+    validate_structure,
     meta={
         "pdb_id": "4TOS",
         "title": "Thermolysin",
@@ -104,7 +93,6 @@ result = run_hook(
         "molecular_weight": 34.6,
         "chain_count": 1,
     },
-    files_dir="tests/fixtures/4TOS",
 )
 ```
 
