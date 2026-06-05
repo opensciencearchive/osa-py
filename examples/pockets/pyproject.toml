@@ -1,0 +1,19 @@
+[project]
+name = "pockets"
+version = "0.1.0"
+description = "Example OSA convention: PDB protein structure validation and pocket detection"
+requires-python = ">=3.13"
+dependencies = [
+    "osa-py",
+    "httpx>=0.27",
+]
+
+[project.entry-points."osa.conventions"]
+pockets = "pockets.convention"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+markers = ["network: tests that require network access"]

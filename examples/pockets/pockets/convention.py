@@ -1,8 +1,10 @@
-"""Example convention: PDB protein structures with validation and ingestion."""
+"""PDB protein structures: validation, pocket detection, and RCSB ingestion."""
 
 from __future__ import annotations
 
-from datetime import date
+from collections.abc import AsyncIterator
+from datetime import date, datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -67,11 +69,11 @@ class PDBIngester:
         self,
         *,
         ctx: IngesterContext,
-        since=None,
-        limit=None,
-        offset=0,
-        session=None,
-    ):
+        since: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        session: dict[str, Any] | None = None,
+    ) -> AsyncIterator[IngesterRecord]:
         import httpx
 
         ids = PDB_IDS[offset:]
