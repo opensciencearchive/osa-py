@@ -12,7 +12,6 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from osa.authoring.ingester import Ingester
 from osa.cli.ingestion import (
     IngestionError,
     build_convention_srn,
@@ -34,7 +33,7 @@ class _Result(BaseModel):
     score: float
 
 
-class _TestIngester(Ingester):
+class _TestIngester:
     name = "test-ingester"
 
     async def pull(
@@ -46,10 +45,10 @@ class _TestIngester(Ingester):
         offset: int = 0,
         session: dict[str, Any] | None = None,
     ) -> AsyncIterator[IngesterRecord]:
-        yield  # type: ignore[misc]  # pragma: no cover
+        yield  # pragma: no cover
 
 
-class _AnotherIngester(Ingester):
+class _AnotherIngester:
     name = "another-ingester"
 
     async def pull(
@@ -61,7 +60,7 @@ class _AnotherIngester(Ingester):
         offset: int = 0,
         session: dict[str, Any] | None = None,
     ) -> AsyncIterator[IngesterRecord]:
-        yield  # type: ignore[misc]  # pragma: no cover
+        yield  # pragma: no cover
 
 
 def _make_response(status_code: int, json_data: dict) -> httpx.Response:

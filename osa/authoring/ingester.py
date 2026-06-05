@@ -26,7 +26,7 @@ class Ingester(Protocol):
 
     class RuntimeConfig(BaseModel): ...
 
-    async def pull(
+    def pull(
         self,
         *,
         ctx: IngesterContext,

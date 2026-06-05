@@ -51,7 +51,6 @@ class TestConventionVersion:
         from osa._registry import _conventions
         from osa.authoring.convention import convention
         from osa.authoring.hook import hook
-        from osa.authoring.ingester import Ingester
         from osa.runtime.ingester_context import IngesterContext
         from osa.types.ingester import IngesterRecord
 
@@ -59,7 +58,7 @@ class TestConventionVersion:
         def detect(record: Record[SampleSchema]) -> list[PocketResult]:
             return []
 
-        class MyIngester(Ingester):
+        class MyIngester:
             name = "test-ingester"
 
             class RuntimeConfig(BaseModel):
@@ -74,7 +73,7 @@ class TestConventionVersion:
                 offset: int = 0,
                 session: dict[str, Any] | None = None,
             ) -> AsyncIterator[IngesterRecord]:
-                yield  # type: ignore[misc]  # pragma: no cover
+                yield  # pragma: no cover
 
         convention(
             title="Test Convention",
@@ -91,7 +90,6 @@ class TestConventionVersion:
         from osa._registry import _conventions
         from osa.authoring.convention import convention
         from osa.authoring.hook import hook
-        from osa.authoring.ingester import Ingester
         from osa.runtime.ingester_context import IngesterContext
         from osa.types.ingester import IngesterRecord
 
@@ -99,7 +97,7 @@ class TestConventionVersion:
         def detect(record: Record[SampleSchema]) -> list[PocketResult]:
             return []
 
-        class MyIngester(Ingester):
+        class MyIngester:
             name = "test-ingester"
 
             class RuntimeConfig(BaseModel):
@@ -114,7 +112,7 @@ class TestConventionVersion:
                 offset: int = 0,
                 session: dict[str, Any] | None = None,
             ) -> AsyncIterator[IngesterRecord]:
-                yield  # type: ignore[misc]  # pragma: no cover
+                yield  # pragma: no cover
 
         convention(
             title="Test Convention",
@@ -193,7 +191,6 @@ class TestManifestWithVersion:
     def test_manifest_convention_has_ingester_name(self) -> None:
         from osa.authoring.convention import convention
         from osa.authoring.hook import hook
-        from osa.authoring.ingester import Ingester
         from osa.manifest import generate_manifest
         from osa.runtime.ingester_context import IngesterContext
         from osa.types.ingester import IngesterRecord
@@ -202,7 +199,7 @@ class TestManifestWithVersion:
         def detect(record: Record[SampleSchema]) -> list[PocketResult]:
             return []
 
-        class MyIngester(Ingester):
+        class MyIngester:
             name = "my-ingester"
 
             class RuntimeConfig(BaseModel):
@@ -217,7 +214,7 @@ class TestManifestWithVersion:
                 offset: int = 0,
                 session: dict[str, Any] | None = None,
             ) -> AsyncIterator[IngesterRecord]:
-                yield  # type: ignore[misc]  # pragma: no cover
+                yield  # pragma: no cover
 
         convention(
             title="Test",
