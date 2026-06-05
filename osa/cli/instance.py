@@ -98,6 +98,11 @@ POSTGRES_DB=osa
 LOG_LEVEL=INFO
 
 # === Authentication ===
+# OSA_DEV_MODE=true is required for local archives: it lets the server start
+# with the placeholder JWT_SECRET below and mints a SUPERADMIN dev token so
+# `osa deploy` is authenticated out of the box. Set to false and supply a real
+# JWT_SECRET + ORCID credentials for non-local deployments.
+OSA_DEV_MODE=true
 JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION-not-suitable-for-real-use
 
 # ORCID credentials (register at https://orcid.org/developer-tools)

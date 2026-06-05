@@ -31,6 +31,7 @@ services:
       OSA_AUTH__ADMINS__ORCID: ${ORCID_ADMINS:-[]}
       OSA_AUTH__BASE_ROLE: DEPOSITOR
       OSA_WORKER__HOOK_CONCURRENCY: "4"
+      OSA_DEV_MODE: ${OSA_DEV_MODE:-false}
       DOCKER_HOST: tcp://docker-socket-proxy:2375
     depends_on:
       db:
