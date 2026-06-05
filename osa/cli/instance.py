@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-OSA_IMAGE_VERSION = "v0.0.2"
+OSA_IMAGE_VERSION = "v0.0.3"
 
 
 class InstanceError(Exception):
@@ -218,6 +218,9 @@ def _build_compose_command(
 
 def _write_dev_override(*, source: Path, project_dir: Path) -> Path:
     source_abs = source.resolve()
+    # The image's ENTRYPOINT is /app/scripts/entrypoint.sh and its CMD is the
+    # uvicorn invocation. We override CMD to add --reload for hot-reload during
+    # source-builds; the entrypoint (migrations + dev admin seed) is shared.
     override = {
         "services": {
             "server": {
@@ -227,8 +230,16 @@ def _write_dev_override(*, source: Path, project_dir: Path) -> Path:
                     "target": "builder",
                 },
                 "image": None,
-                "entrypoint": [],
-                "command": ["/app/scripts/entrypoint.sh"],
+                "command": [
+                    "uvicorn",
+                    "--factory",
+                    "osa.application.api.rest.app:create_app",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "8000",
+                    "--reload",
+                ],
                 "environment": {
                     "OSA_DEV_MODE": "true",
                 },

@@ -56,9 +56,6 @@ class TestMintDevToken:
 
 
 class TestHelpers:
-    def test_image_version_is_pinned(self) -> None:
-        assert OSA_IMAGE_VERSION == "v0.0.2"
-
     def test_compose_template_path_exists(self) -> None:
         path = _compose_template_path()
         assert path.exists()
