@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Optional
 
@@ -11,6 +9,7 @@ if TYPE_CHECKING:
     from osa.testing.runner import TestResult
 
 import typer
+from pydantic import BaseModel, ConfigDict
 
 from osa.cli._ingestion_commands import ingestion_app
 from osa.cli._runtime_commands import (
@@ -19,9 +18,55 @@ from osa.cli._runtime_commands import (
     progress_command,
     reject_command,
 )
+from osa.cli.ui import UI
+
+
+class CLIState(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    ui: UI
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        print(f"osa {version('osa-py')}")
+        raise typer.Exit()
+
 
 app = typer.Typer(help="OSA — Open Scientific Archive CLI")
 app.add_typer(ingestion_app, name="ingestion")
+
+
+@app.callback()
+def main(
+    ctx: typer.Context,
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            help="Show version and exit.",
+            callback=_version_callback,
+            is_eager=True,
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Stream full subprocess output and extra detail.",
+        ),
+    ] = False,
+) -> None:
+    """OSA — Open Scientific Archive CLI"""
+    ctx.obj = CLIState(ui=UI.create(verbose=verbose))
+
+
+def _ui(ctx: typer.Context) -> UI:
+    state = ctx.obj
+    return state.ui if isinstance(state, CLIState) else UI.create()
 
 
 @app.command()
@@ -56,38 +101,36 @@ def reject(
 
 @app.command()
 def link(
+    ctx: typer.Context,
     server: Annotated[str, typer.Option(help="Server URL to link.")],
 ) -> None:
     """Link this project to an OSA server."""
     from osa.cli.link import write_link
 
+    ui = _ui(ctx)
     config_path = write_link(server)
-    print(f"Linked to {server.rstrip('/')}")
-    print(f"Config written to {config_path}")
+    ui.success(f"Linked to {server.rstrip('/')}")
+    ui.detail(f"Config written to {config_path}")
 
 
 @app.command()
 def login(
+    ctx: typer.Context,
     server: Annotated[Optional[str], typer.Option(help="Server URL.")] = None,
 ) -> None:
     """Authenticate with an OSA server via device flow."""
-    import logging
-
     from osa.cli.link import resolve_server
     from osa.cli.login import login as do_login
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
     server_url = resolve_server(flag=server)
-    success = do_login(server_url)
+    success = do_login(server_url, ui=_ui(ctx))
     if not success:
         raise typer.Exit(1)
 
 
 @app.command()
 def logout(
+    ctx: typer.Context,
     server: Annotated[Optional[str], typer.Option(help="Server URL.")] = None,
 ) -> None:
     """Remove stored credentials for a server."""
@@ -95,11 +138,12 @@ def logout(
     from osa.cli.logout import logout as do_logout
 
     server_url = resolve_server(flag=server)
-    do_logout(server_url)
+    do_logout(server_url, ui=_ui(ctx))
 
 
 @app.command()
 def deploy(
+    ctx: typer.Context,
     server: Annotated[Optional[str], typer.Option(help="Server URL.")] = None,
     token: Annotated[Optional[str], typer.Option(help="Auth token.")] = None,
     registry: Annotated[
@@ -120,10 +164,10 @@ def deploy(
     import importlib
     import importlib.metadata
 
-    from osa.cli.deploy import deploy as do_deploy
+    from osa.cli.deploy import DeployError, deploy as do_deploy
     from osa.cli.link import resolve_server
 
-    print("Deploying...")
+    ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
         importlib.import_module(ep.value)
@@ -136,23 +180,25 @@ def deploy(
 
         resolved_token = resolve_token(server_url)
         if resolved_token is None:
-            print(
-                "Error: Not authenticated. Run `osa login` first.",
-                file=sys.stderr,
-            )
+            ui.error("Not authenticated", hint="Run `osa login` first")
             raise typer.Exit(1)
 
-    result = do_deploy(
-        server=server_url,
-        token=resolved_token,
-        registry=registry,
-        skip_build=skip_build,
-    )
-    print(json.dumps(result, indent=2, default=str))
+    try:
+        do_deploy(
+            server=server_url,
+            token=resolved_token,
+            registry=registry,
+            skip_build=skip_build,
+            ui=ui,
+        )
+    except DeployError as e:
+        ui.error(str(e), cause=e.cause, hint=e.hint)
+        raise typer.Exit(1) from None
 
 
 @app.command(name="init")
 def init_cmd(
+    ctx: typer.Context,
     project_dir: Annotated[
         Path,
         typer.Argument(help="Directory to initialize (default: current directory)."),
@@ -161,33 +207,39 @@ def init_cmd(
         Optional[str],
         typer.Option(help="Archive name (defaults to directory name)."),
     ] = None,
-    osa_version: Annotated[
-        Optional[str],
-        typer.Option("--osa-version", help="OSA server image version tag."),
-    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Overwrite existing configuration files."),
     ] = False,
 ) -> None:
     """Initialize a new OSA archive project."""
-    from osa.cli.instance import InstanceError, fetch_latest_osa_version, init_project
+    from osa.cli.instance import InstanceError, init_project
 
+    ui = _ui(ctx)
     try:
-        image_version = osa_version or fetch_latest_osa_version()
-        init_project(
+        result = init_project(
             project_dir=project_dir.resolve(),
             name=name,
-            image_version=image_version,
             force=force,
         )
     except InstanceError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        ui.error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None
+
+    ui.success(f"Initialized OSA project in {result.project_dir}")
+    width = max(len(path) for path, _ in result.created)
+    for path, description in result.created:
+        ui.detail(f"{path.ljust(width)}  {description}")
+    ui.info("")
+    ui.info("Next steps:")
+    if result.show_cd:
+        ui.info(f"  cd {result.project_dir.name}")
+    ui.info("  osa start")
 
 
 @app.command()
 def start(
+    ctx: typer.Context,
     detach: Annotated[
         bool,
         typer.Option("--detach", "-d", help="Run in background."),
@@ -200,36 +252,45 @@ def start(
         bool,
         typer.Option("--with-ui", help="Start the web UI."),
     ] = False,
+    osa_version: Annotated[
+        Optional[str],
+        typer.Option("--osa-version", help="OSA server image version tag."),
+    ] = None,
 ) -> None:
     """Start the local OSA instance."""
     from osa.cli.instance import InstanceError, start_instance
 
+    ui = _ui(ctx)
     try:
         start_instance(
             project_dir=Path.cwd(),
             detach=detach,
             source=source.resolve() if source else None,
             with_ui=with_ui,
+            osa_version=osa_version,
+            ui=ui,
         )
     except InstanceError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        ui.error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None
 
 
 @app.command()
-def stop() -> None:
+def stop(ctx: typer.Context) -> None:
     """Stop the local OSA instance."""
     from osa.cli.instance import InstanceError, stop_instance
 
+    ui = _ui(ctx)
     try:
-        stop_instance(project_dir=Path.cwd())
+        stop_instance(project_dir=Path.cwd(), ui=ui)
     except InstanceError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        ui.error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None
 
 
 @app.command()
 def logs(
+    ctx: typer.Context,
     follow: Annotated[
         bool,
         typer.Option("--follow", "-f", help="Follow log output."),
@@ -254,24 +315,44 @@ def logs(
             tail=tail,
         )
     except InstanceError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        _ui(ctx).error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None
+
+
+_STATE_GLYPHS = {"running": "✓", "exited": "✗", "dead": "✗", "paused": "⚠"}
 
 
 @app.command()
-def status() -> None:
+def status(ctx: typer.Context) -> None:
     """Show status of the local OSA instance."""
     from osa.cli.instance import InstanceError, instance_status
 
+    ui = _ui(ctx)
     try:
-        instance_status(project_dir=Path.cwd())
+        services = instance_status(project_dir=Path.cwd())
     except InstanceError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        ui.error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None
+
+    if not services:
+        ui.info("No services running — run `osa start` to launch the archive")
+        return
+
+    rows = [
+        [
+            _STATE_GLYPHS.get(s.state, "⚠"),
+            s.name,
+            s.state + (f" ({s.health})" if s.health else ""),
+            s.ports,
+        ]
+        for s in services
+    ]
+    ui.table(["", "SERVICE", "STATE", "PORTS"], rows)
 
 
 @app.command("test")
 def test_cmd(
+    ctx: typer.Context,
     limit: Annotated[
         int,
         typer.Option(help="Max records to pull from the ingester."),
@@ -290,19 +371,21 @@ def test_cmd(
     from osa._registry import _conventions
     from osa.testing.runner import TestError, run_test
 
+    ui = _ui(ctx)
+
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
         importlib.import_module(ep.value)
 
     candidates = [c for c in _conventions if c.ingester_info is not None]
 
     if not candidates:
-        print("Error: No conventions with an ingester found.", file=sys.stderr)
+        ui.error("No conventions with an ingester found")
         raise typer.Exit(1)
 
     if convention:
         matched = [c for c in candidates if c.title == convention]
         if not matched:
-            print(f"Error: Convention '{convention}' not found.", file=sys.stderr)
+            ui.error(f"Convention '{convention}' not found")
             raise typer.Exit(1)
         conv = matched[0]
     elif len(candidates) == 1:
@@ -313,52 +396,57 @@ def test_cmd(
             abort=True,
         )
     else:
-        print("Multiple conventions found:\n")
+        ui.info("Multiple conventions found:")
         for i, c in enumerate(candidates, 1):
             assert c.ingester_info is not None
-            print(f"  {i}. {c.title}@{c.version} (ingester: {c.ingester_info.name})")
-        print()
+            ui.info(f"  {i}. {c.title}@{c.version} (ingester: {c.ingester_info.name})")
         choice = typer.prompt("Select a convention", type=int)
         if choice < 1 or choice > len(candidates):
-            print("Error: Invalid selection.", file=sys.stderr)
+            ui.error("Invalid selection")
             raise typer.Exit(1)
         conv = candidates[choice - 1]
 
-    try:
-        result = run_test(convention_info=conv, limit=limit)
-    except TestError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        raise typer.Exit(1) from None
+    with ui.task(f"Running {conv.ingester_info.name}") as task:  # type: ignore[union-attr]
+        try:
+            result = run_test(convention_info=conv, limit=limit)
+        except TestError as e:
+            task.fail(str(e))
+            raise typer.Exit(1) from None
+        ids = ", ".join(r.source_id for r in result.records)
+        task.done(detail=f"{len(result.records)} record(s) ({ids})" if ids else "")
 
-    _print_test_result(result)
+    _render_test_result(result, ui)
 
     if not result.records:
         raise typer.Exit(1)
 
 
-def _print_test_result(result: TestResult) -> None:
-    ids = ", ".join(r.source_id for r in result.records)
-    print(f"\nIngester {result.ingester_name}: {len(result.records)} record(s) ({ids})")
-    print()
-
+def _render_test_result(result: TestResult, ui: UI) -> None:
     for record in result.records:
-        print(f"  {record.source_id}")
-        for hook_outcome in record.hooks:
-            if hook_outcome.status == "passed":
-                detail = _format_result(hook_outcome.result)
-                suffix = f" → {detail}" if detail else ""
-                print(f"    ✓ {hook_outcome.hook_name}{suffix}")
-            elif hook_outcome.status == "rejected":
-                print(f"    ✗ {hook_outcome.hook_name} → Reject: {hook_outcome.reason}")
-            elif hook_outcome.status == "error":
-                print(f"    ✗ {hook_outcome.hook_name} → Error: {hook_outcome.reason}")
-            elif hook_outcome.status == "skipped":
-                print(f"    - {hook_outcome.hook_name} (skipped)")
-        print()
+        with ui.phase(record.source_id):
+            for hook_outcome in record.hooks:
+                if hook_outcome.status == "passed":
+                    detail = _format_result(hook_outcome.result)
+                    suffix = f" → {detail}" if detail else ""
+                    ui.success(f"{hook_outcome.hook_name}{suffix}")
+                elif hook_outcome.status == "rejected":
+                    ui.error(
+                        f"{hook_outcome.hook_name} → Reject: {hook_outcome.reason}"
+                    )
+                elif hook_outcome.status == "error":
+                    ui.error(f"{hook_outcome.hook_name} → Error: {hook_outcome.reason}")
+                elif hook_outcome.status == "skipped":
+                    ui.detail(f"{hook_outcome.hook_name} (skipped)")
 
     accepted = sum(1 for r in result.records if r.accepted)
     rejected = len(result.records) - accepted
-    print(f"{len(result.records)} record(s), {accepted} accepted, {rejected} rejected")
+    summary = (
+        f"{len(result.records)} record(s): {accepted} accepted, {rejected} rejected"
+    )
+    if rejected:
+        ui.warn(summary)
+    else:
+        ui.success(summary)
 
 
 def _format_result(result: object) -> str:

@@ -298,7 +298,10 @@ class TestDeployEndToEnd:
             )
         )
 
-        # Mock docker build + inspect
+        # Mock docker build (streamed) + inspect
+        from osa.cli.proc import ProcResult
+
+        mock_streamed = MagicMock(return_value=ProcResult(returncode=0, output=""))
         mock_run = MagicMock()
         mock_run.return_value = MagicMock(returncode=0, stdout="sha256:fakedigest\n")
 
@@ -314,6 +317,7 @@ class TestDeployEndToEnd:
         mock_httpx.post.return_value = mock_response
 
         with (
+            patch("osa.cli.deploy.run_streamed", mock_streamed),
             patch("osa.cli.deploy.subprocess.run", mock_run),
             patch("osa.cli.deploy.httpx", mock_httpx),
             patch("osa.cli.deploy.Path.write_text"),

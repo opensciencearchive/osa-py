@@ -88,45 +88,38 @@ class TestReadProjectName:
 class TestInitProject:
     def test_creates_osa_yaml(self, tmp_path: Path) -> None:
         project = tmp_path / "my-archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         config = yaml.safe_load((project / "osa.yaml").read_text())
         assert config["name"] == "my-archive"
         assert config["domain"] == "localhost"
 
     def test_creates_env_file(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         env = (project / ".env").read_text()
         assert "POSTGRES_PASSWORD=" in env
         assert "JWT_SECRET=" in env
-        assert "OSA_IMAGE_VERSION=" in env
 
     def test_env_has_well_known_dev_secrets(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         env = (project / ".env").read_text()
         assert "POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION" in env
         assert "JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION" in env
 
-    def test_env_includes_image_version(self, tmp_path: Path) -> None:
-        project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
-        env = (project / ".env").read_text()
-        assert "OSA_IMAGE_VERSION=v0.0.0" in env
-
     def test_creates_data_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         assert (project / ".data").is_dir()
 
     def test_creates_osa_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         assert (project / ".osa").is_dir()
 
     def test_creates_gitignore(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         gitignore = (project / ".gitignore").read_text()
         assert ".data/" in gitignore
         assert ".env" in gitignore
@@ -136,7 +129,7 @@ class TestInitProject:
         project = tmp_path / "archive"
         project.mkdir()
         (project / ".gitignore").write_text("*.pyc\n__pycache__/\n")
-        init_project(project_dir=project, image_version="v0.0.0", force=True)
+        init_project(project_dir=project, force=True)
         gitignore = (project / ".gitignore").read_text()
         assert "*.pyc" in gitignore
         assert ".data/" in gitignore
@@ -145,79 +138,76 @@ class TestInitProject:
         project = tmp_path / "archive"
         project.mkdir()
         (project / ".gitignore").write_text(".data/\n.env\n.osa/\n")
-        init_project(project_dir=project, image_version="v0.0.0", force=True)
+        init_project(project_dir=project, force=True)
         gitignore = (project / ".gitignore").read_text()
         assert gitignore.count(".data/") == 1
 
     def test_custom_name(self, tmp_path: Path) -> None:
         project = tmp_path / "dir"
-        init_project(project_dir=project, name="custom-name", image_version="v0.0.0")
+        init_project(project_dir=project, name="custom-name")
         config = yaml.safe_load((project / "osa.yaml").read_text())
         assert config["name"] == "custom-name"
 
     def test_uses_dir_name_as_default(self, tmp_path: Path) -> None:
         project = tmp_path / "my-cool-archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         config = yaml.safe_load((project / "osa.yaml").read_text())
         assert config["name"] == "my-cool-archive"
 
     def test_creates_target_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "nested" / "deep" / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         assert project.is_dir()
         assert (project / "osa.yaml").exists()
 
     def test_refuses_existing_config(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         with pytest.raises(InstanceError, match="already initialized"):
-            init_project(project_dir=project, image_version="v0.0.0")
+            init_project(project_dir=project)
 
     def test_force_overwrites(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
-        init_project(project_dir=project, image_version="v0.0.0", force=True)
+        init_project(project_dir=project)
+        init_project(project_dir=project, force=True)
         assert (project / "osa.yaml").exists()
 
     def test_force_preserves_data_dir(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project)
         (project / ".data" / "important.db").write_text("data")
-        init_project(project_dir=project, image_version="v0.0.0", force=True)
+        init_project(project_dir=project, force=True)
         assert (project / ".data" / "important.db").exists()
 
     def test_returns_project_dir(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        result = init_project(project_dir=project, image_version="v0.0.0")
-        assert result == project
+        result = init_project(project_dir=project)
+        assert result.project_dir == project
+
+    def test_lists_created_files(self, tmp_path: Path) -> None:
+        result = init_project(project_dir=tmp_path / "archive")
+        created_paths = [path for path, _ in result.created]
+        assert created_paths == ["osa.yaml", ".env", ".data/", ".osa/", ".gitignore"]
 
     def test_init_current_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        init_project(project_dir=tmp_path, image_version="v0.0.0")
+        init_project(project_dir=tmp_path)
         assert (tmp_path / "osa.yaml").exists()
         assert (tmp_path / ".env").exists()
         assert (tmp_path / ".data").is_dir()
 
-    def test_init_current_dir_skips_cd_in_output(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
+    def test_init_current_dir_skips_cd_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        init_project(project_dir=tmp_path, image_version="v0.0.0")
-        output = capsys.readouterr().out
-        assert "cd " not in output
+        result = init_project(project_dir=tmp_path)
+        assert result.show_cd is False
 
-    def test_init_other_dir_shows_cd_in_output(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        project = tmp_path / "my-archive"
-        init_project(project_dir=project, image_version="v0.0.0")
-        output = capsys.readouterr().out
-        assert "cd my-archive" in output
+    def test_init_other_dir_shows_cd_hint(self, tmp_path: Path) -> None:
+        result = init_project(project_dir=tmp_path / "my-archive")
+        assert result.show_cd is True
 
 
 class TestBuildComposeCommand:
@@ -304,6 +294,15 @@ class TestWriteDevOverride:
         assert path == tmp_path / ".osa" / "docker-compose.dev.yml"
 
 
+def _mock_streamed(returncode: int = 0, output: str = ""):
+    from osa.cli.proc import ProcResult
+
+    return patch(
+        "osa.cli.instance.run_streamed",
+        return_value=ProcResult(returncode=returncode, output=output),
+    )
+
+
 class TestStartInstance:
     @pytest.fixture(autouse=True)
     def _mock_credentials(self):
@@ -312,18 +311,17 @@ class TestStartInstance:
 
     def test_calls_docker_compose_up(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "up" in args
         assert "-d" in args
 
-    def test_no_detach(self, tmp_path: Path) -> None:
+    def test_no_detach_inherits_stdio(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
         with patch("osa.cli.instance.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path, detach=False)
+            start_instance(project_dir=tmp_path, detach=False, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "up" in args
         assert "-d" not in args
@@ -332,17 +330,15 @@ class TestStartInstance:
         _write_osa_yaml(tmp_path)
         source = tmp_path / "server-src"
         source.mkdir()
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path, source=source)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, source=source, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "--build" in args
 
     def test_with_ui_adds_profile(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path, with_ui=True)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, with_ui=True, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "--profile" in args
         idx = args.index("--profile")
@@ -350,38 +346,34 @@ class TestStartInstance:
 
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):
-            start_instance(project_dir=tmp_path)
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
 
     def test_raises_on_compose_failure(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 1
+        with _mock_streamed(returncode=1):
             with pytest.raises(InstanceError, match="Failed to start"):
-                start_instance(project_dir=tmp_path)
+                start_instance(project_dir=tmp_path, osa_version="v0.0.0")
 
     def test_runs_in_project_dir(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
         assert mock_run.call_args[1]["cwd"] == tmp_path
 
     def test_links_to_local_server(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path)
+        with _mock_streamed():
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
         config = json.loads((tmp_path / ".osa" / "config.json").read_text())
         assert config["server"] == "http://127.0.0.1:8000"
 
     def test_stores_dev_credentials(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
         with (
-            patch("osa.cli.instance.subprocess.run") as mock_run,
+            _mock_streamed(),
             patch("osa.cli.credentials.write_credentials") as mock_creds,
         ):
-            mock_run.return_value.returncode = 0
-            start_instance(project_dir=tmp_path)
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
         mock_creds.assert_called_once()
         call_kwargs = mock_creds.call_args
         assert call_kwargs[0][0] == "http://127.0.0.1:8000"
@@ -392,8 +384,7 @@ class TestStartInstance:
 class TestStopInstance:
     def test_calls_docker_compose_down(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
+        with _mock_streamed() as mock_run:
             stop_instance(project_dir=tmp_path)
         args = mock_run.call_args[0][0]
         assert "down" in args
@@ -404,8 +395,7 @@ class TestStopInstance:
 
     def test_raises_on_compose_failure(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
-        with patch("osa.cli.instance.subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 1
+        with _mock_streamed(returncode=1):
             with pytest.raises(InstanceError, match="Failed to stop"):
                 stop_instance(project_dir=tmp_path)
 
@@ -451,9 +441,38 @@ class TestInstanceStatus:
         _write_osa_yaml(tmp_path)
         with patch("osa.cli.instance.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = ""
             instance_status(project_dir=tmp_path)
         args = mock_run.call_args[0][0]
         assert "ps" in args
+        assert "--format" in args
+
+    def test_parses_services_from_json_lines(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        line = json.dumps(
+            {
+                "Service": "server",
+                "State": "running",
+                "Health": "healthy",
+                "Publishers": [{"PublishedPort": 8000, "TargetPort": 8000}],
+            }
+        )
+        with patch("osa.cli.instance.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = line + "\n"
+            services = instance_status(project_dir=tmp_path)
+        assert len(services) == 1
+        assert services[0].name == "server"
+        assert services[0].state == "running"
+        assert services[0].health == "healthy"
+        assert services[0].ports == "8000->8000"
+
+    def test_returns_empty_list_when_nothing_running(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        with patch("osa.cli.instance.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = ""
+            assert instance_status(project_dir=tmp_path) == []
 
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):

@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 import subprocess
-import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,24 @@ import httpx
 from pydantic import BaseModel
 
 from osa._registry import ConventionInfo, HookInfo, IngesterInfo, _conventions, _hooks
+from osa.cli.proc import run_streamed, tail
+from osa.cli.ui import UI, Task
 from osa.manifest import generate_columns
+
+
+class DeployError(RuntimeError):
+    """Deploy failure with optional captured output and remediation hint."""
+
+    def __init__(
+        self, message: str, *, cause: str | None = None, hint: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.hint = hint
+
+
+def _short_digest(digest: str) -> str:
+    return digest.removeprefix("sha256:")[:12]
 
 
 def _read_python_version(project_dir: Path) -> str:
@@ -134,6 +151,8 @@ def _build_image(
     project_dir: Path,
     tag_prefix: str,
     registry: str | None = None,
+    *,
+    task: Task,
 ) -> tuple[str, str]:
     """Build a Docker image, optionally push to a registry.
 
@@ -151,8 +170,8 @@ def _build_image(
     )
 
     try:
-        print(f"Building image for {name} → {tag}")
-        build = subprocess.run(
+        task.detail("building")
+        build = run_streamed(
             [
                 "docker",
                 "build",
@@ -164,15 +183,14 @@ def _build_image(
                 tag,
                 str(project_dir),
             ],
-            capture_output=True,
-            text=True,
+            task=task,
         )
         if build.returncode != 0:
-            print(
-                f"Docker build failed for {name}:\n{build.stderr or build.stdout}",
-                file=sys.stderr,
+            raise DeployError(
+                f"Docker build failed for {name}",
+                cause=tail(build.output, 30),
+                hint="Re-run with --verbose for full build output",
             )
-            build.check_returncode()
 
         # Get the local image ID
         result = subprocess.run(
@@ -194,21 +212,17 @@ def _build_image(
             repo_digests = json.loads(result.stdout.strip() or "null")
             if repo_digests:
                 digest = repo_digests[0].split("@", 1)[1]
-                print(f"Image unchanged, skipping push for {tag}")
+                task.done(detail=f"{_short_digest(digest)} (unchanged)")
                 return tag, digest
 
-            print(f"Pushing {tag}")
-            push = subprocess.run(
-                ["docker", "push", tag],
-                capture_output=True,
-                text=True,
-            )
+            task.detail("pushing")
+            push = run_streamed(["docker", "push", tag], task=task)
             if push.returncode != 0:
-                print(
-                    f"Docker push failed for {tag}:\n{push.stderr or push.stdout}",
-                    file=sys.stderr,
+                raise DeployError(
+                    f"Docker push failed for {tag}",
+                    cause=tail(push.output, 30),
+                    hint="Check registry access (docker login) and OSA_REGISTRY",
                 )
-                push.check_returncode()
 
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{index .RepoDigests 0}}", tag],
@@ -219,10 +233,10 @@ def _build_image(
             repo_digest = result.stdout.strip()
             digest = repo_digest.split("@", 1)[1]
 
-            print(f"Pushed {tag} → {digest}")
+            task.done(detail=_short_digest(digest))
             return tag, digest
 
-        print(f"Built {tag} → {local_id}")
+        task.done(detail=_short_digest(local_id))
         return tag, local_id
     finally:
         dockerfile_path.unlink(missing_ok=True)
@@ -235,11 +249,13 @@ def _build_hook_image(
     project_dir: Path,
     tag_prefix: str,
     registry: str | None = None,
+    *,
+    task: Task,
 ) -> tuple[str, str]:
     """Build a Docker image for a hook and return (image_tag, digest)."""
     dockerfile_content = generate_hook_dockerfile(project_dir)
     return _build_image(
-        hook.name, dockerfile_content, project_dir, tag_prefix, registry
+        hook.name, dockerfile_content, project_dir, tag_prefix, registry, task=task
     )
 
 
@@ -248,6 +264,8 @@ def _build_ingester_image(
     project_dir: Path,
     tag_prefix: str,
     registry: str | None = None,
+    *,
+    task: Task,
 ) -> tuple[str, str]:
     """Build a Docker image for an ingester and return (image_tag, digest)."""
     dockerfile_content = generate_ingester_dockerfile(project_dir)
@@ -257,6 +275,7 @@ def _build_ingester_image(
         project_dir,
         f"{tag_prefix}-ingesters",
         registry,
+        task=task,
     )
 
 
@@ -350,8 +369,9 @@ def _resolve_existing_image(tag: str) -> tuple[str, str]:
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Image not found in registry: {tag}. Run deploy without --skip-build first."
+        raise DeployError(
+            f"Image not found in registry: {tag}",
+            hint="Run deploy without --skip-build first",
         )
     data = json.loads(result.stdout)
     # docker manifest inspect --verbose returns a dict with Descriptor.digest
@@ -359,11 +379,44 @@ def _resolve_existing_image(tag: str) -> tuple[str, str]:
         data = data[0]
     digest = data.get("Descriptor", {}).get("digest", "")
     if not digest:
-        raise RuntimeError(
-            f"Could not resolve digest for {tag}. Run deploy without --skip-build first."
+        raise DeployError(
+            f"Could not resolve digest for {tag}",
+            hint="Run deploy without --skip-build first",
         )
-    print(f"Reusing {tag} ({digest[:19]}...)")
     return tag, digest
+
+
+def _register_convention(
+    conv: ConventionInfo,
+    payload: dict[str, Any],
+    server: str,
+    token: str | None,
+) -> dict[str, Any]:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    url = f"{server.rstrip('/')}/api/v1/conventions"
+    try:
+        resp = httpx.post(url, json=payload, headers=headers, timeout=30.0)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        hint = (
+            "Run `osa login` to refresh credentials" if status in (401, 403) else None
+        )
+        raise DeployError(
+            f"Server rejected convention '{conv.title}' ({status})",
+            cause=e.response.text[:2000],
+            hint=hint,
+        ) from e
+    except httpx.HTTPError as e:
+        raise DeployError(
+            f"Could not reach {server}",
+            cause=str(e),
+            hint="Check the server URL and your network connection",
+        ) from e
+    return resp.json()
 
 
 def deploy(
@@ -373,11 +426,13 @@ def deploy(
     token: str | None = None,
     registry: str | None = None,
     skip_build: bool = False,
+    ui: UI | None = None,
 ) -> dict[str, Any]:
     """Build hook/ingester images and register conventions with the OSA server.
 
     Returns the server response for the created convention.
     """
+    ui = ui or UI.create()
     if project_dir is None:
         project_dir = Path.cwd()
 
@@ -387,65 +442,89 @@ def deploy(
             "Make sure the convention package is imported before calling deploy."
         )
 
-    # Build images for each hook
-    hook_images: dict[str, tuple[str, str]] = {}
-    for hook in _hooks:
-        if skip_build and registry:
-            tag = f"{registry.rstrip('/')}/{hook.name}:latest"
-            hook_images[hook.name] = _resolve_existing_image(tag)
-        else:
-            image, digest = _build_hook_image(hook, project_dir, tag_prefix, registry)
-            hook_images[hook.name] = (image, digest)
+    started_at = time.monotonic()
+    ingester_names = list(
+        dict.fromkeys(
+            conv.ingester_info.name
+            for conv in _conventions
+            if conv.ingester_info is not None
+        )
+    )
+    image_count = len(_hooks) + len(ingester_names)
+    reuse_images = skip_build and registry is not None
+    phase_title = "Resolving images" if reuse_images else "Building images"
 
-    # Build images for ingesters
+    hook_images: dict[str, tuple[str, str]] = {}
     ingester_images: dict[str, tuple[str, str]] = {}
-    for conv in _conventions:
-        if conv.ingester_info is not None:
-            name = conv.ingester_info.name
-            if name not in ingester_images:
-                if skip_build and registry:
-                    tag = f"{registry.rstrip('/')}/{name}:latest"
-                    ingester_images[name] = _resolve_existing_image(tag)
-                else:
-                    image, digest = _build_ingester_image(
-                        conv.ingester_info, project_dir, tag_prefix, registry
+
+    with ui.phase(phase_title, count=image_count) as build_phase:
+        for hook in _hooks:
+            if reuse_images:
+                assert registry is not None
+                tag = f"{registry.rstrip('/')}/{hook.name}:latest"
+                resolved = _resolve_existing_image(tag)
+                hook_images[hook.name] = resolved
+                build_phase.task(hook.name).skip(
+                    f"reusing {_short_digest(resolved[1])}"
+                )
+            else:
+                with build_phase.task(hook.name) as task:
+                    hook_images[hook.name] = _build_hook_image(
+                        hook, project_dir, tag_prefix, registry, task=task
                     )
-                    ingester_images[name] = (image, digest)
+
+        for conv in _conventions:
+            if conv.ingester_info is None:
+                continue
+            name = conv.ingester_info.name
+            if name in ingester_images:
+                continue
+            if reuse_images:
+                assert registry is not None
+                tag = f"{registry.rstrip('/')}/{name}:latest"
+                resolved = _resolve_existing_image(tag)
+                ingester_images[name] = resolved
+                build_phase.task(name).skip(f"reusing {_short_digest(resolved[1])}")
+            else:
+                with build_phase.task(name) as task:
+                    ingester_images[name] = _build_ingester_image(
+                        conv.ingester_info,
+                        project_dir,
+                        tag_prefix,
+                        registry,
+                        task=task,
+                    )
 
     results: list[dict[str, Any]] = []
 
-    for conv in _conventions:
-        # Match hooks to this convention
-        hook_defs = []
-        for h in conv.hooks:
-            name = h.__name__
-            if name in hook_images:
-                image, digest = hook_images[name]
-                hook_info = next(hi for hi in _hooks if hi.name == name)
-                hook_defs.append(_hook_to_definition(hook_info, image, digest))
+    with ui.phase("Registering conventions", count=len(_conventions)) as reg_phase:
+        for conv in _conventions:
+            hook_defs = []
+            for h in conv.hooks:
+                name = h.__name__
+                if name in hook_images:
+                    image, digest = hook_images[name]
+                    hook_info = next(hi for hi in _hooks if hi.name == name)
+                    hook_defs.append(_hook_to_definition(hook_info, image, digest))
 
-        # Get ingester image if applicable
-        ingester_img = None
-        if (
-            conv.ingester_info is not None
-            and conv.ingester_info.name in ingester_images
-        ):
-            ingester_img = ingester_images[conv.ingester_info.name]
+            ingester_img = None
+            if (
+                conv.ingester_info is not None
+                and conv.ingester_info.name in ingester_images
+            ):
+                ingester_img = ingester_images[conv.ingester_info.name]
 
-        payload = _convention_to_payload(conv, hook_defs, ingester_img)
+            payload = _convention_to_payload(conv, hook_defs, ingester_img)
 
-        print(f"Registering convention '{conv.title}' with {server}")
+            with reg_phase.task(conv.title) as task:
+                result = _register_convention(conv, payload, server, token)
+                task.done(detail=str(result.get("srn", "")))
+            results.append(result)
 
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        url = f"{server.rstrip('/')}/api/v1/conventions"
-        resp = httpx.post(url, json=payload, headers=headers, timeout=30.0)
-        resp.raise_for_status()
-        result = resp.json()
-        results.append(result)
-
-        print(f"Convention registered: {result.get('srn', '')}")
+    noun = "convention" if len(results) == 1 else "conventions"
+    ui.success(
+        f"Deployed {len(results)} {noun}",
+        elapsed=time.monotonic() - started_at,
+    )
 
     return results[0] if len(results) == 1 else {"conventions": results}

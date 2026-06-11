@@ -24,12 +24,12 @@ class TestLogout:
         logout("https://a.com", cred_path=cred_file)
 
         assert read_credentials("https://a.com", path=cred_file) is None
-        assert "Logged out" in capsys.readouterr().out
+        assert "Logged out" in capsys.readouterr().err
 
     def test_noop_when_none_exist(self, cred_file: Path, capsys):
         logout("https://a.com", cred_path=cred_file)
 
-        assert "No credentials found" in capsys.readouterr().out
+        assert "No credentials found" in capsys.readouterr().err
 
     def test_multi_server_isolation(self, cred_file: Path):
         write_credentials(

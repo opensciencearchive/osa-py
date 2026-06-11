@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 import time
 import webbrowser
 from pathlib import Path
@@ -13,6 +12,7 @@ import httpx
 
 from osa.cli.credentials import _DEFAULT_PATH, write_credentials
 from osa.cli.link import write_link
+from osa.cli.ui import UI
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +92,13 @@ def login(
     *,
     cred_path: Path = _DEFAULT_PATH,
     project_dir: Path | None = None,
+    ui: UI | None = None,
 ) -> bool:
     """Run the device flow login.
 
     Returns True on success, False on failure.
     """
+    ui = ui or UI.create()
     server = server.rstrip("/")
 
     with httpx.Client(timeout=30.0) as client:
@@ -105,7 +107,10 @@ def login(
             resp = client.post(f"{server}/api/v1/auth/device")
             resp.raise_for_status()
         except httpx.HTTPError as e:
-            print(f"Error: Could not reach server at {server}", file=sys.stderr)
+            ui.error(
+                f"Could not reach server at {server}",
+                hint="Check the server URL and your network connection",
+            )
             logger.debug("Initiation failed: %s", e)
             return False
 
@@ -117,9 +122,8 @@ def login(
         interval = data["interval"]
 
         # Step 2: Display code and URL
-        print(f"Open this URL in your browser: {verification_uri}")
-        print(f"Enter code: {user_code}")
-        print()
+        ui.info(f"Open: {verification_uri}")
+        ui.info(f"Code: {user_code}")
 
         # Try to open browser
         try:
@@ -128,21 +132,17 @@ def login(
             pass  # Non-critical — user can open manually
 
         # Step 3: Poll for token
-        print("Waiting for authorization...", end=" ", flush=True)
-        result = _poll_for_token(
-            client=client,
-            server=server,
-            device_code=device_code,
-            interval=interval,
-            expires_in=expires_in,
-        )
-
-        if result is None:
-            print("failed")
-            print("Device code expired. Please try again.", file=sys.stderr)
-            return False
-
-        print("done")
+        with ui.task("Waiting for authorization") as task:
+            result = _poll_for_token(
+                client=client,
+                server=server,
+                device_code=device_code,
+                interval=interval,
+                expires_in=expires_in,
+            )
+            if result is None:
+                task.fail("device code expired — run `osa login` to try again")
+                return False
 
         # Step 4: Store credentials
         write_credentials(
@@ -155,5 +155,5 @@ def login(
         # Step 5: Link project to this server
         write_link(server, project_dir=project_dir)
 
-        print("Token stored.")
+        ui.success(f"Logged in to {server}")
         return True

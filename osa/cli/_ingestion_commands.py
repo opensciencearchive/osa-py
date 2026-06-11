@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import sys
 from typing import Annotated, Optional
 
 import typer
@@ -13,12 +11,19 @@ from osa.cli.ingestion import (
     discover_ingestable_conventions,
     start_ingestion,
 )
+from osa.cli.ui import UI
 
 ingestion_app = typer.Typer(help="Manage ingestion runs.")
 
 
+def _ui(ctx: typer.Context) -> UI:
+    ui = getattr(ctx.obj, "ui", None)
+    return ui if isinstance(ui, UI) else UI.create()
+
+
 @ingestion_app.command()
 def start(
+    ctx: typer.Context,
     convention: Annotated[
         Optional[str],
         typer.Option(
@@ -34,16 +39,14 @@ def start(
     from osa.cli.credentials import resolve_token
     from osa.cli.link import resolve_server
 
+    ui = _ui(ctx)
     server_url = resolve_server(flag=server)
 
     resolved_token = token
     if not resolved_token:
         resolved_token = resolve_token(server_url)
         if resolved_token is None:
-            print(
-                "Error: Not authenticated. Run `osa login` first.",
-                file=sys.stderr,
-            )
+            ui.error("Not authenticated", hint="Run `osa login` first")
             raise typer.Exit(1)
 
     resolved_name = convention
@@ -51,14 +54,11 @@ def start(
         try:
             candidates = discover_ingestable_conventions()
         except IngestionError as e:
-            print(f"Error: {e}", file=sys.stderr)
+            ui.error(str(e))
             raise typer.Exit(1) from None
 
         if len(candidates) == 0:
-            print(
-                "Error: No conventions with an ingester found.",
-                file=sys.stderr,
-            )
+            ui.error("No conventions with an ingester found")
             raise typer.Exit(1)
         elif len(candidates) == 1:
             pick = candidates[0]
@@ -69,25 +69,25 @@ def start(
             )
             resolved_name = pick.title
         else:
-            print("Multiple ingestable conventions found:\n")
+            ui.info("Multiple ingestable conventions found:")
             for i, c in enumerate(candidates, 1):
-                print(f"  {i}. {c.title}@{c.version} (ingester: {c.ingester_name})")
-            print()
+                ui.info(f"  {i}. {c.title}@{c.version} (ingester: {c.ingester_name})")
             choice = typer.prompt("Select a convention", type=int)
             if choice < 1 or choice > len(candidates):
-                print("Error: Invalid selection.", file=sys.stderr)
+                ui.error("Invalid selection")
                 raise typer.Exit(1)
             resolved_name = candidates[choice - 1].title
 
-    try:
-        result = start_ingestion(
-            server=server_url,
-            convention=resolved_name,
-            token=resolved_token,
-            batch_size=batch_size,
-            limit=limit,
-        )
-        print(json.dumps(result, indent=2))
-    except IngestionError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        raise typer.Exit(1) from None
+    with ui.task(f"Starting ingestion for {resolved_name}") as task:
+        try:
+            result = start_ingestion(
+                server=server_url,
+                convention=resolved_name,
+                token=resolved_token,
+                batch_size=batch_size,
+                limit=limit,
+            )
+        except IngestionError as e:
+            task.fail(str(e))
+            raise typer.Exit(1) from None
+        task.done(detail=str(result.get("srn", "")))
