@@ -161,18 +161,24 @@ def init_cmd(
         Optional[str],
         typer.Option(help="Archive name (defaults to directory name)."),
     ] = None,
+    osa_version: Annotated[
+        Optional[str],
+        typer.Option("--osa-version", help="OSA server image version tag."),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Overwrite existing configuration files."),
     ] = False,
 ) -> None:
     """Initialize a new OSA archive project."""
-    from osa.cli.instance import InstanceError, init_project
+    from osa.cli.instance import InstanceError, fetch_latest_osa_version, init_project
 
     try:
+        image_version = osa_version or fetch_latest_osa_version()
         init_project(
             project_dir=project_dir.resolve(),
             name=name,
+            image_version=image_version,
             force=force,
         )
     except InstanceError as e:

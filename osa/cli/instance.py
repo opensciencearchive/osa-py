@@ -15,7 +15,41 @@ from pathlib import Path
 
 import yaml
 
-OSA_IMAGE_VERSION = "v0.0.3"
+GHCR_IMAGE = "opensciencearchive/osa"
+
+
+def fetch_latest_osa_version() -> str:
+    """Fetch the latest semver tag from GHCR for the OSA server image."""
+    import httpx
+
+    token_url = f"https://ghcr.io/token?scope=repository:{GHCR_IMAGE}:pull"
+    tags_url = f"https://ghcr.io/v2/{GHCR_IMAGE}/tags/list"
+
+    try:
+        token_resp = httpx.get(token_url, timeout=10)
+        token_resp.raise_for_status()
+        token = token_resp.json()["token"]
+
+        tags_resp = httpx.get(
+            tags_url, headers={"Authorization": f"Bearer {token}"}, timeout=10
+        )
+        tags_resp.raise_for_status()
+        tags = tags_resp.json()["tags"]
+    except (httpx.HTTPError, KeyError) as e:
+        raise InstanceError(
+            "Could not fetch latest OSA version from the container registry. "
+            "Use --osa-version to specify manually."
+        ) from e
+
+    semver = [t for t in tags if re.match(r"^v\d+\.\d+\.\d+$", t)]
+    if not semver:
+        raise InstanceError(
+            "No release tags found in the container registry. "
+            "Use --osa-version to specify manually."
+        )
+
+    semver.sort(key=lambda t: tuple(int(x) for x in t[1:].split(".")))
+    return semver[-1]
 
 
 class InstanceError(Exception):
@@ -131,6 +165,7 @@ def init_project(
     *,
     project_dir: Path,
     name: str | None = None,
+    image_version: str,
     force: bool = False,
 ) -> Path:
     """Scaffold a new OSA project directory.
@@ -148,9 +183,7 @@ def init_project(
     (project_dir / "osa.yaml").write_text(_OSA_YAML_TEMPLATE.format(name=resolved_name))
 
     # Write .env with generated secrets
-    (project_dir / ".env").write_text(
-        _ENV_TEMPLATE.format(image_version=OSA_IMAGE_VERSION)
-    )
+    (project_dir / ".env").write_text(_ENV_TEMPLATE.format(image_version=image_version))
 
     # Create directories
     (project_dir / ".data").mkdir(exist_ok=True)

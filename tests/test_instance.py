@@ -11,7 +11,6 @@ import pytest
 import yaml
 
 from osa.cli.instance import (
-    OSA_IMAGE_VERSION,
     InstanceError,
     _build_compose_command,
     _compose_template_path,
@@ -89,14 +88,14 @@ class TestReadProjectName:
 class TestInitProject:
     def test_creates_osa_yaml(self, tmp_path: Path) -> None:
         project = tmp_path / "my-archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         config = yaml.safe_load((project / "osa.yaml").read_text())
         assert config["name"] == "my-archive"
         assert config["domain"] == "localhost"
 
     def test_creates_env_file(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         env = (project / ".env").read_text()
         assert "POSTGRES_PASSWORD=" in env
         assert "JWT_SECRET=" in env
@@ -104,30 +103,30 @@ class TestInitProject:
 
     def test_env_has_well_known_dev_secrets(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         env = (project / ".env").read_text()
         assert "POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION" in env
         assert "JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION" in env
 
     def test_env_includes_image_version(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         env = (project / ".env").read_text()
-        assert f"OSA_IMAGE_VERSION={OSA_IMAGE_VERSION}" in env
+        assert "OSA_IMAGE_VERSION=v0.0.0" in env
 
     def test_creates_data_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         assert (project / ".data").is_dir()
 
     def test_creates_osa_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         assert (project / ".osa").is_dir()
 
     def test_creates_gitignore(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         gitignore = (project / ".gitignore").read_text()
         assert ".data/" in gitignore
         assert ".env" in gitignore
@@ -137,7 +136,7 @@ class TestInitProject:
         project = tmp_path / "archive"
         project.mkdir()
         (project / ".gitignore").write_text("*.pyc\n__pycache__/\n")
-        init_project(project_dir=project, force=True)
+        init_project(project_dir=project, image_version="v0.0.0", force=True)
         gitignore = (project / ".gitignore").read_text()
         assert "*.pyc" in gitignore
         assert ".data/" in gitignore
@@ -146,57 +145,57 @@ class TestInitProject:
         project = tmp_path / "archive"
         project.mkdir()
         (project / ".gitignore").write_text(".data/\n.env\n.osa/\n")
-        init_project(project_dir=project, force=True)
+        init_project(project_dir=project, image_version="v0.0.0", force=True)
         gitignore = (project / ".gitignore").read_text()
         assert gitignore.count(".data/") == 1
 
     def test_custom_name(self, tmp_path: Path) -> None:
         project = tmp_path / "dir"
-        init_project(project_dir=project, name="custom-name")
+        init_project(project_dir=project, name="custom-name", image_version="v0.0.0")
         config = yaml.safe_load((project / "osa.yaml").read_text())
         assert config["name"] == "custom-name"
 
     def test_uses_dir_name_as_default(self, tmp_path: Path) -> None:
         project = tmp_path / "my-cool-archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         config = yaml.safe_load((project / "osa.yaml").read_text())
         assert config["name"] == "my-cool-archive"
 
     def test_creates_target_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "nested" / "deep" / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         assert project.is_dir()
         assert (project / "osa.yaml").exists()
 
     def test_refuses_existing_config(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         with pytest.raises(InstanceError, match="already initialized"):
-            init_project(project_dir=project)
+            init_project(project_dir=project, image_version="v0.0.0")
 
     def test_force_overwrites(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
-        init_project(project_dir=project, force=True)
+        init_project(project_dir=project, image_version="v0.0.0")
+        init_project(project_dir=project, image_version="v0.0.0", force=True)
         assert (project / "osa.yaml").exists()
 
     def test_force_preserves_data_dir(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         (project / ".data" / "important.db").write_text("data")
-        init_project(project_dir=project, force=True)
+        init_project(project_dir=project, image_version="v0.0.0", force=True)
         assert (project / ".data" / "important.db").exists()
 
     def test_returns_project_dir(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
-        result = init_project(project_dir=project)
+        result = init_project(project_dir=project, image_version="v0.0.0")
         assert result == project
 
     def test_init_current_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        init_project(project_dir=tmp_path)
+        init_project(project_dir=tmp_path, image_version="v0.0.0")
         assert (tmp_path / "osa.yaml").exists()
         assert (tmp_path / ".env").exists()
         assert (tmp_path / ".data").is_dir()
@@ -208,7 +207,7 @@ class TestInitProject:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        init_project(project_dir=tmp_path)
+        init_project(project_dir=tmp_path, image_version="v0.0.0")
         output = capsys.readouterr().out
         assert "cd " not in output
 
@@ -216,7 +215,7 @@ class TestInitProject:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         project = tmp_path / "my-archive"
-        init_project(project_dir=project)
+        init_project(project_dir=project, image_version="v0.0.0")
         output = capsys.readouterr().out
         assert "cd my-archive" in output
 
