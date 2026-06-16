@@ -24,23 +24,49 @@ GHCR_IMAGE = "opensciencearchive/osa"
 LOCAL_SERVER_URL = "http://127.0.0.1:8000"
 
 
+def _next_page_url(link_header: str | None) -> str | None:
+    """Extract the absolute ``rel="next"`` URL from a registry Link header.
+
+    GHCR returns a relative path (e.g. ``</v2/.../tags/list?last=...&n=...>``),
+    so it is resolved against the GHCR host.
+    """
+    if not link_header or 'rel="next"' not in link_header:
+        return None
+    start = link_header.find("<")
+    end = link_header.find(">", start)
+    if start == -1 or end == -1:
+        return None
+    path = link_header[start + 1 : end]
+    return path if path.startswith("http") else f"https://ghcr.io{path}"
+
+
 def fetch_latest_osa_version() -> str:
-    """Fetch the latest semver tag from GHCR for the OSA server image."""
+    """Fetch the latest semver tag from GHCR for the OSA server image.
+
+    The registry has no server-side filter or sort, and ``/tags/list`` is
+    paginated (it accrues a ``sha-*`` tag per build). We request a large page
+    (``n=1000``) and follow the ``Link: rel="next"`` cursor until all tags are
+    collected, then pick the highest ``vX.Y.Z`` tag client-side.
+    """
     import httpx
 
     token_url = f"https://ghcr.io/token?scope=repository:{GHCR_IMAGE}:pull"
-    tags_url = f"https://ghcr.io/v2/{GHCR_IMAGE}/tags/list"
+    tags: list[str] = []
 
     try:
         token_resp = httpx.get(token_url, timeout=10)
         token_resp.raise_for_status()
         token = token_resp.json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
 
-        tags_resp = httpx.get(
-            tags_url, headers={"Authorization": f"Bearer {token}"}, timeout=10
-        )
-        tags_resp.raise_for_status()
-        tags = tags_resp.json()["tags"]
+        url: str | None = f"https://ghcr.io/v2/{GHCR_IMAGE}/tags/list?n=1000"
+        pages = 0
+        while url is not None and pages < 50:
+            resp = httpx.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            tags.extend(resp.json()["tags"] or [])
+            url = _next_page_url(resp.headers.get("Link"))
+            pages += 1
     except (httpx.HTTPError, KeyError) as e:
         raise InstanceError(
             "Could not fetch latest OSA version from the container registry",

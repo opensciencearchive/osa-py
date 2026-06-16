@@ -17,6 +17,7 @@ from osa.cli.instance import (
     _mint_dev_token,
     _read_project_name,
     _write_dev_override,
+    fetch_latest_osa_version,
     init_project,
     instance_logs,
     instance_status,
@@ -477,3 +478,61 @@ class TestInstanceStatus:
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):
             instance_status(project_dir=tmp_path)
+
+
+def _ghcr_resp(json_data: dict, link: str | None = None):
+    from unittest.mock import MagicMock
+
+    resp = MagicMock()
+    resp.json.return_value = json_data
+    resp.raise_for_status.return_value = None
+    resp.headers = {"Link": link} if link else {}
+    return resp
+
+
+class TestFetchLatestOsaVersion:
+    def test_picks_highest_semver_single_page(self) -> None:
+        responses = [
+            _ghcr_resp({"token": "t"}),
+            _ghcr_resp({"tags": ["sha-abc", "v0.0.1", "v0.0.5", "v0.0.4", "latest"]}),
+        ]
+        with patch("httpx.get", side_effect=responses) as mock_get:
+            assert fetch_latest_osa_version() == "v0.0.5"
+
+        # Requests a large page so everything usually arrives in one response.
+        tags_call = mock_get.call_args_list[1]
+        assert "n=1000" in tags_call.args[0]
+
+    def test_follows_pagination_to_find_newer_tag(self) -> None:
+        # v0.0.5 only appears on the second page (the real GHCR bug).
+        next_link = (
+            f'</v2/{"opensciencearchive/osa"}/tags/list?last=sha-z&n=1000>; rel="next"'
+        )
+        responses = [
+            _ghcr_resp({"token": "t"}),
+            _ghcr_resp({"tags": ["v0.0.4", "sha-a"]}, link=next_link),
+            _ghcr_resp({"tags": ["v0.0.5", "sha-b"]}),
+        ]
+        with patch("httpx.get", side_effect=responses) as mock_get:
+            assert fetch_latest_osa_version() == "v0.0.5"
+
+        # token + two tag pages
+        assert mock_get.call_count == 3
+
+    def test_tolerates_null_tags_page(self) -> None:
+        responses = [
+            _ghcr_resp({"token": "t"}),
+            _ghcr_resp({"tags": None}),
+        ]
+        with patch("httpx.get", side_effect=responses):
+            with pytest.raises(InstanceError, match="No release tags found"):
+                fetch_latest_osa_version()
+
+    def test_raises_when_registry_unreachable(self) -> None:
+        import httpx
+
+        with patch("httpx.get", side_effect=httpx.ConnectError("boom")):
+            with pytest.raises(
+                InstanceError, match="Could not fetch latest OSA version"
+            ):
+                fetch_latest_osa_version()
