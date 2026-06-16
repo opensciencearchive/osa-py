@@ -46,6 +46,7 @@ class TestRunTest:
 
         convention(
             title=title,
+            description="A test convention",
             version="1.0.0",
             schema=RunnerSchema,
             hooks=registered_hooks,

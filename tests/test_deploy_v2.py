@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -60,6 +61,7 @@ class TestConventionToPayload:
 
         conv = ConventionInfo(
             title="Test Convention",
+            description="A test convention",
             version="1.0.0",
             schema_type=FakeSchema,
             file_requirements={
@@ -73,9 +75,11 @@ class TestConventionToPayload:
 
         payload = _convention_to_payload(conv, [])
         assert payload["title"] == "Test Convention"
-        assert payload["version"] == "1.0.0"
-        assert len(payload["schema"]) == 2
-        assert payload["schema"][0]["name"] == "title"
+        assert payload["description"] == "A test convention"
+        assert payload["schema"]["id"] == "fake-schema"
+        assert payload["schema"]["version"] == "1.0.0"
+        assert len(payload["schema"]["fields"]) == 2
+        assert payload["schema"]["fields"][0]["name"] == "title"
         assert payload["ingester"] is None
 
     def test_includes_ingester_definition(self) -> None:
@@ -85,6 +89,7 @@ class TestConventionToPayload:
 
         conv = ConventionInfo(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema_type=FakeSchema,
             file_requirements={
@@ -118,6 +123,7 @@ class TestConventionToPayload:
 
         conv = ConventionInfo(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema_type=FakeSchema,
             file_requirements={"accepted_types": [".csv"]},
@@ -136,6 +142,7 @@ class TestConventionToPayload:
 
         conv = ConventionInfo(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema_type=FakeSchema,
             file_requirements={"accepted_types": [".cif"]},
@@ -151,6 +158,7 @@ class TestConventionToPayload:
 
         conv = ConventionInfo(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema_type=FakeSchema,
             file_requirements={
@@ -171,23 +179,24 @@ class TestConventionToPayload:
         hook_defs = [
             {
                 "name": "detect_pockets",
-                "runtime": {
-                    "type": "oci",
-                    "image": "osa-hooks/detect_pockets:latest",
-                    "digest": "sha256:abc123",
-                    "config": {},
-                    "limits": {"timeout_seconds": 300, "memory": "2g", "cpu": "2.0"},
-                },
                 "feature": {
                     "kind": "table",
                     "cardinality": "many",
                     "columns": [],
+                },
+                "release": {
+                    "image": "osa-hooks/detect_pockets:latest",
+                    "digest": "sha256:abc123",
+                    "config": {},
+                    "limits": {"timeout_seconds": 300, "memory": "2g", "cpu": "2.0"},
+                    "source_ref": "git:abc1234",
                 },
             }
         ]
 
         conv = ConventionInfo(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema_type=FakeSchema,
             file_requirements={
@@ -202,7 +211,7 @@ class TestConventionToPayload:
         payload = _convention_to_payload(conv, hook_defs)
         assert len(payload["hooks"]) == 1
         assert (
-            payload["hooks"][0]["runtime"]["image"] == "osa-hooks/detect_pockets:latest"
+            payload["hooks"][0]["release"]["image"] == "osa-hooks/detect_pockets:latest"
         )
 
 
@@ -226,10 +235,11 @@ class TestHookToDefinition:
         )
 
         defn = _hook_to_definition(
-            hook_info, "osa-hooks/detect_pockets:latest", "sha256:abc"
+            hook_info, "osa-hooks/detect_pockets:latest", "sha256:abc", "git:abc1234"
         )
-        assert defn["runtime"]["image"] == "osa-hooks/detect_pockets:latest"
-        assert defn["runtime"]["digest"] == "sha256:abc"
+        assert defn["release"]["image"] == "osa-hooks/detect_pockets:latest"
+        assert defn["release"]["digest"] == "sha256:abc"
+        assert defn["release"]["source_ref"] == "git:abc1234"
         assert defn["name"] == "detect_pockets"
         assert defn["feature"]["cardinality"] == "many"
         assert len(defn["feature"]["columns"]) == 2
@@ -246,8 +256,31 @@ class TestHookToDefinition:
             cardinality="one",
         )
 
-        defn = _hook_to_definition(hook_info, "img:latest", "sha256:xyz")
+        defn = _hook_to_definition(hook_info, "img:latest", "sha256:xyz", "git:unknown")
         assert defn["feature"]["columns"] == []
+
+
+class TestResolveSourceRef:
+    def test_returns_git_ref_on_success(self) -> None:
+        from osa.cli.deploy import _resolve_source_ref
+
+        mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="1a2b3c4\n"))
+        with patch("osa.cli.deploy.subprocess.run", mock_run):
+            assert _resolve_source_ref(Path(".")) == "git:1a2b3c4"
+
+    def test_falls_back_to_unknown_on_failure(self) -> None:
+        from osa.cli.deploy import _resolve_source_ref
+
+        mock_run = MagicMock(return_value=MagicMock(returncode=128, stdout=""))
+        with patch("osa.cli.deploy.subprocess.run", mock_run):
+            assert _resolve_source_ref(Path(".")) == "git:unknown"
+
+    def test_falls_back_when_git_missing(self) -> None:
+        from osa.cli.deploy import _resolve_source_ref
+
+        mock_run = MagicMock(side_effect=FileNotFoundError)
+        with patch("osa.cli.deploy.subprocess.run", mock_run):
+            assert _resolve_source_ref(Path(".")) == "git:unknown"
 
 
 class TestDeployRaisesWithoutConventions:
@@ -286,6 +319,7 @@ class TestDeployEndToEnd:
         _conventions.append(
             ConventionInfo(
                 title="PDB Structures",
+                description="Protein structures from the PDB",
                 version="1.0.0",
                 schema_type=FakeSchema,
                 file_requirements={
@@ -308,13 +342,24 @@ class TestDeployEndToEnd:
         # Mock httpx.post
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "srn": "urn:osa:localhost:conv:abc",
+            "slug": "pdb-structures",
             "title": "PDB Structures",
+            "description": "Protein structures from the PDB",
+            "schema_id": "fake-schema@1.0.0",
+            "hooks": ["detect_pockets"],
+            "created_at": "2026-06-15T12:00:00Z",
         }
         mock_response.raise_for_status = MagicMock()
 
         mock_httpx = MagicMock()
         mock_httpx.post.return_value = mock_response
+
+        import io
+
+        from osa.cli.ui import UI
+
+        buf = io.StringIO()
+        ui = UI.create(file=buf, force_plain=True)
 
         with (
             patch("osa.cli.deploy.run_streamed", mock_streamed),
@@ -326,14 +371,22 @@ class TestDeployEndToEnd:
             result = deploy(
                 server="http://localhost:8000",
                 token="fake-jwt",
+                ui=ui,
             )
 
-        assert result["srn"] == "urn:osa:localhost:conv:abc"
+        assert result["schema_id"] == "fake-schema@1.0.0"
+
+        # Deploy hints how to start ingestion, using the server-minted slug.
+        output = buf.getvalue()
+        assert "osa ingestion start --convention pdb-structures" in output
 
         # Verify POST was made to correct URL
         call_args = mock_httpx.post.call_args
         payload = call_args[1]["json"]
+        assert "slug" not in payload
         assert payload["title"] == "PDB Structures"
+        assert payload["schema"]["id"] == "fake-schema"
+        assert payload["hooks"][0]["release"]["source_ref"].startswith("git:")
         assert payload["ingester"] is not None
         assert payload["ingester"]["runner"] == "oci"
         assert payload["ingester"]["config"] == {"email": "", "batch_size": 100}

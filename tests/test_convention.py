@@ -40,6 +40,8 @@ class TestConventionRegistration:
 
         convention(
             title="Test Convention",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files={"extensions": [".cif"], "min": 1, "max": 10},
             hooks=[detect],
@@ -57,6 +59,8 @@ class TestConventionRegistration:
 
         convention(
             title="Protein Structure",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files={"extensions": [".cif"]},
             hooks=[detect],
@@ -74,6 +78,8 @@ class TestConventionRegistration:
 
         convention(
             title="Test",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files={},
             hooks=[detect],
@@ -92,6 +98,8 @@ class TestConventionRegistration:
         files = {"extensions": [".cif", ".pdb"], "min": 1, "max": 10}
         convention(
             title="Test",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files=files,
             hooks=[detect],
@@ -113,6 +121,8 @@ class TestConventionRegistration:
 
         convention(
             title="Full",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files={},
             hooks=[check, detect],
@@ -134,12 +144,16 @@ class TestConventionRegistration:
 
         convention(
             title="Simple",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files={},
             hooks=[detect],
         )
         convention(
             title="Detailed",
+            description="A test convention",
+            version="1.0.0",
             schema=SampleSchema,
             files={},
             hooks=[check, detect],

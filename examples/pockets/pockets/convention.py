@@ -127,6 +127,7 @@ class PDBIngester:
 
 convention(
     title="Protein Structures",
+    description="Protein structures from the PDB, with pocket detection.",
     version="1.0.0",
     schema=PDBStructure,
     ingester=PDBIngester,

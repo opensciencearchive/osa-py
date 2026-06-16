@@ -43,6 +43,7 @@ class ConventionInfo:
     """Metadata from a convention() declaration."""
 
     title: str
+    description: str
     version: str
     schema_type: type[MetadataSchema]
     file_requirements: dict[str, Any]
