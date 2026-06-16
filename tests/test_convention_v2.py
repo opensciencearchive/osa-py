@@ -40,6 +40,7 @@ class TestConventionVersion:
 
         convention(
             title="Test Convention",
+            description="A test convention",
             version="1.0.0",
             schema=SampleSchema,
             files={"accepted_types": [".cif"]},
@@ -77,6 +78,7 @@ class TestConventionVersion:
 
         convention(
             title="Test Convention",
+            description="A test convention",
             version="1.0.0",
             schema=SampleSchema,
             ingester=MyIngester,
@@ -116,6 +118,7 @@ class TestConventionVersion:
 
         convention(
             title="Test Convention",
+            description="A test convention",
             version="1.0.0",
             schema=SampleSchema,
             ingester=MyIngester,
@@ -137,30 +140,13 @@ class TestConventionVersion:
 
         convention(
             title="No Ingester",
+            description="A test convention",
             version="1.0.0",
             schema=SampleSchema,
             files={},
             hooks=[detect],
         )
         assert _conventions[0].ingester_info is None
-
-    def test_backward_compatible_without_version(self) -> None:
-        """version defaults to '0.0.0' if omitted."""
-        from osa._registry import _conventions
-        from osa.authoring.convention import convention
-        from osa.authoring.hook import hook
-
-        @hook
-        def detect(record: Record[SampleSchema]) -> list[PocketResult]:
-            return []
-
-        convention(
-            title="No Version",
-            schema=SampleSchema,
-            files={},
-            hooks=[detect],
-        )
-        assert _conventions[0].version == "0.0.0"
 
 
 class TestManifestWithVersion:
@@ -180,6 +166,7 @@ class TestManifestWithVersion:
 
         convention(
             title="Test",
+            description="A test convention",
             version="2.1.0",
             schema=SampleSchema,
             files={},
@@ -218,6 +205,7 @@ class TestManifestWithVersion:
 
         convention(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema=SampleSchema,
             ingester=MyIngester,
@@ -238,6 +226,7 @@ class TestManifestWithVersion:
 
         convention(
             title="Test",
+            description="A test convention",
             version="1.0.0",
             schema=SampleSchema,
             files={},

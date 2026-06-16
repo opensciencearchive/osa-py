@@ -39,6 +39,7 @@ class ConventionManifest(BaseModel):
     """Manifest entry for a convention."""
 
     title: str
+    description: str
     version: str
     record_schema: str
     file_requirements: dict[str, Any]
@@ -152,6 +153,7 @@ def generate_manifest() -> Manifest:
     conventions = [
         ConventionManifest(
             title=c.title,
+            description=c.description,
             version=c.version,
             record_schema=c.schema_type.__name__,
             file_requirements=c.file_requirements,

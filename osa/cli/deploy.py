@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -45,17 +46,28 @@ def _read_python_version(project_dir: Path) -> str:
 
 
 def _find_sdk_path(project_dir: Path) -> Path | None:
-    """Resolve the local OSA SDK path from [tool.uv.sources] in pyproject.toml."""
+    """Resolve a local OSA SDK path from ``[tool.uv.sources]`` in pyproject.toml.
+
+    Honours an ``osa-py = { path = "..." }`` source (as written by
+    ``uv add path/to/osa-py``) so that `osa deploy` bakes a filesystem WIP SDK
+    into the built images instead of pulling ``osa-py`` from PyPI.
+    """
     pyproject_path = project_dir / "pyproject.toml"
     if not pyproject_path.exists():
         return None
-    content = pyproject_path.read_text()
-    match = re.search(r'osa\s*=\s*\{\s*path\s*=\s*"([^"]+)"', content)
-    if match:
-        sdk_path = (project_dir / match.group(1)).resolve()
-        if sdk_path.exists():
-            return sdk_path
-    return None
+
+    with pyproject_path.open("rb") as f:
+        data = tomllib.load(f)
+
+    source = data.get("tool", {}).get("uv", {}).get("sources", {}).get("osa-py")
+    if not isinstance(source, dict):
+        return None
+    path = source.get("path")
+    if not isinstance(path, str):
+        return None
+
+    sdk_path = (project_dir / path).resolve()
+    return sdk_path if sdk_path.exists() else None
 
 
 def generate_hook_dockerfile(project_dir: Path) -> str:
@@ -279,10 +291,31 @@ def _build_ingester_image(
     )
 
 
+def _resolve_source_ref(project_dir: Path) -> str:
+    """Return a reproducibility anchor 'git:<short-sha>' for the project.
+
+    Falls back to 'git:unknown' when no git revision is available (not a
+    repository, or no commits yet).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_dir), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "git:unknown"
+    sha = result.stdout.strip()
+    if result.returncode != 0 or not sha:
+        return "git:unknown"
+    return f"git:{sha}"
+
+
 def _hook_to_definition(
     hook: HookInfo,
     image: str,
     digest: str,
+    source_ref: str,
 ) -> dict[str, Any]:
     """Build a HookDefinition dict from a HookInfo + image details."""
     columns: list[dict[str, Any]] = []
@@ -295,17 +328,17 @@ def _hook_to_definition(
 
     return {
         "name": hook.name,
-        "runtime": {
-            "type": "oci",
-            "image": image,
-            "digest": digest,
-            "config": {},
-            "limits": hook.limits.model_dump(),
-        },
         "feature": {
             "kind": "table",
             "cardinality": hook.cardinality,
             "columns": columns,
+        },
+        "release": {
+            "image": image,
+            "digest": digest,
+            "config": {},
+            "limits": hook.limits.model_dump(),
+            "source_ref": source_ref,
         },
     }
 
@@ -351,10 +384,13 @@ def _convention_to_payload(
         }
 
     return {
-        "id": conv.schema_type.schema_id(),
         "title": conv.title,
-        "version": conv.version,
-        "schema": schema_fields,
+        "description": conv.description,
+        "schema": {
+            "id": conv.schema_type.schema_id(),
+            "version": conv.version,
+            "fields": schema_fields,
+        },
         "file_requirements": file_reqs,
         "hooks": hook_definitions,
         "ingester": ingester,
@@ -496,6 +532,8 @@ def deploy(
                     )
 
     results: list[dict[str, Any]] = []
+    ingestable: list[tuple[str, str]] = []  # (title, slug) for conventions w/ ingester
+    source_ref = _resolve_source_ref(project_dir)
 
     with ui.phase("Registering conventions", count=len(_conventions)) as reg_phase:
         for conv in _conventions:
@@ -505,7 +543,9 @@ def deploy(
                 if name in hook_images:
                     image, digest = hook_images[name]
                     hook_info = next(hi for hi in _hooks if hi.name == name)
-                    hook_defs.append(_hook_to_definition(hook_info, image, digest))
+                    hook_defs.append(
+                        _hook_to_definition(hook_info, image, digest, source_ref)
+                    )
 
             ingester_img = None
             if (
@@ -518,13 +558,22 @@ def deploy(
 
             with reg_phase.task(conv.title) as task:
                 result = _register_convention(conv, payload, server, token)
-                task.done(detail=str(result.get("srn", "")))
+                task.done(detail=str(result.get("schema_id", "")))
             results.append(result)
+
+            if conv.ingester_info is not None:
+                slug = result.get("slug")
+                if slug:
+                    ingestable.append((conv.title, slug))
 
     noun = "convention" if len(results) == 1 else "conventions"
     ui.success(
         f"Deployed {len(results)} {noun}",
         elapsed=time.monotonic() - started_at,
     )
+
+    for title, slug in ingestable:
+        ui.info(f"Ingester ready for {title} — start a run with:")
+        ui.detail(f"osa ingestion start --convention {slug}")
 
     return results[0] if len(results) == 1 else {"conventions": results}
