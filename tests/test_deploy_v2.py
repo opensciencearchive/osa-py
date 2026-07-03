@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from osa import Example
 from osa._registry import ConventionInfo, HookInfo, IngesterInfo, clear
 
 
@@ -329,6 +330,11 @@ class TestDeployEndToEnd:
                 },
                 hooks=[fake_hook],
                 ingester_info=ingester_info,
+                purpose="Protein structures for tests.",
+                example_questions=["q1?", "q2?", "q3?"],
+                examples=[
+                    Example(question="q1?", query="GET /x", interpretation="means x")
+                ],
             )
         )
 

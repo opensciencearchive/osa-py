@@ -23,6 +23,17 @@ class QualityResult(BaseModel):
     atom_count: int
 
 
+def _test_docs_kwargs() -> dict:
+    """Minimal valid docs for convention() — mandatory since #151."""
+    from osa import Example
+
+    return {
+        "purpose": "Test data for unit tests.",
+        "example_questions": ["q1?", "q2?", "q3?"],
+        "examples": [Example(question="q1?", query="GET /x", interpretation="means x")],
+    }
+
+
 class TestConventionRegistration:
     def setup_method(self) -> None:
         from osa._registry import clear
@@ -45,6 +56,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files={"extensions": [".cif"], "min": 1, "max": 10},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert len(_conventions) == 1
 
@@ -64,6 +76,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files={"extensions": [".cif"]},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].title == "Protein Structure"
 
@@ -83,6 +96,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files={},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].schema_type is SampleSchema
 
@@ -103,6 +117,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files=files,
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].file_requirements == files
 
@@ -126,6 +141,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files={},
             hooks=[check, detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].hooks == [check, detect]
 
@@ -149,6 +165,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files={},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         convention(
             title="Detailed",
@@ -157,6 +174,7 @@ class TestConventionRegistration:
             schema=SampleSchema,
             files={},
             hooks=[check, detect],
+            **_test_docs_kwargs(),
         )
         assert len(_conventions) == 2
         assert _conventions[0].title == "Simple"

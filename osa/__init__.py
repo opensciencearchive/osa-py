@@ -1,6 +1,7 @@
 """OSA Python SDK — hooks and conventions for the Open Scientific Archive."""
 
 from osa.authoring.convention import convention
+from osa.authoring.example import Example
 from osa.authoring.hook import hook
 from osa.authoring.ingester import Ingester
 from osa.authoring.validator import Reject
@@ -19,6 +20,7 @@ from osa.types.schema import Field, MetadataSchema
 Schema = MetadataSchema
 
 __all__ = [
+    "Example",
     "Field",
     "Ingester",
     "IngesterContext",

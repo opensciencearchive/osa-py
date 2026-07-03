@@ -23,6 +23,8 @@ class ColumnDef(BaseModel):
     json_type: str
     format: str | None = None
     required: bool
+    description: str | None = None
+    unit: str | None = None
 
 
 class HookManifestEntry(BaseModel):
@@ -99,8 +101,23 @@ def _is_required(field_info: Any) -> bool:
     return field_info.is_required()
 
 
+def _column_unit(field_info: Any) -> str | None:
+    """Measurement unit from ``json_schema_extra["unit"]``, if declared."""
+    extra = field_info.json_schema_extra
+    if isinstance(extra, dict):
+        unit = extra.get("unit")
+        if isinstance(unit, str):
+            return unit
+    return None
+
+
 def generate_columns(model_cls: type[BaseModel]) -> list[ColumnDef]:
-    """Generate column definitions from a Pydantic BaseModel."""
+    """Generate column definitions from a Pydantic BaseModel.
+
+    Carries the field's ``description`` and a ``json_schema_extra["unit"]``
+    annotation through to the deploy payload (#151) so the node can document
+    feature-table columns for agents.
+    """
     columns: list[ColumnDef] = []
     for name, field_info in model_cls.model_fields.items():
         json_type, fmt = _resolve_json_type(field_info.annotation)
@@ -110,6 +127,8 @@ def generate_columns(model_cls: type[BaseModel]) -> list[ColumnDef]:
                 json_type=json_type,
                 format=fmt,
                 required=_is_required(field_info),
+                description=field_info.description,
+                unit=_column_unit(field_info),
             )
         )
     return columns

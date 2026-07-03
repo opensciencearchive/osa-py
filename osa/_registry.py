@@ -7,6 +7,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any
 
+from osa.authoring.example import Example
 from osa.types.ingester import IngesterSchedule, InitialRun, Limits
 from osa.types.schema import MetadataSchema
 
@@ -40,7 +41,12 @@ class IngesterInfo:
 
 @dataclass
 class ConventionInfo:
-    """Metadata from a convention() declaration."""
+    """Metadata from a convention() declaration.
+
+    ``purpose``/``examples`` default empty only at this internal layer —
+    ``convention()`` requires them, and the deploy pre-flight rejects an
+    undocumented ConventionInfo before any build or network call (#151).
+    """
 
     title: str
     description: str
@@ -49,6 +55,11 @@ class ConventionInfo:
     file_requirements: dict[str, Any]
     hooks: list[types.FunctionType]
     ingester_info: IngesterInfo | None = None
+    purpose: str = ""
+    examples: list[Example] = field(default_factory=list)
+    example_questions: list[str] = field(default_factory=list)
+    when_not_to_use: str | None = None
+    see_also: list[str] | None = None
 
 
 _hooks: list[HookInfo] = []

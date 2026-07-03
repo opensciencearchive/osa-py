@@ -107,3 +107,41 @@ class TestToFieldDefinitions:
         assert isinstance(fields, list)
         assert all(isinstance(f, dict) for f in fields)
         assert len(fields) == 4
+
+
+class DocumentedSchema(MetadataSchema):
+    __schema_id__ = "documented-schema"
+
+    yield_strength: float = Field(
+        description="0.2% offset yield strength",
+        unit="MPa",
+        examples=["512"],
+    )
+    alloy: str
+
+
+class TestFieldMetadataEmission:
+    """#151: description and examples must reach the server, not be dropped."""
+
+    def test_description_is_emitted(self) -> None:
+        fields = DocumentedSchema.to_field_definitions()
+        f = next(f for f in fields if f["name"] == "yield_strength")
+        assert f["description"] == "0.2% offset yield strength"
+
+    def test_examples_are_emitted(self) -> None:
+        fields = DocumentedSchema.to_field_definitions()
+        f = next(f for f in fields if f["name"] == "yield_strength")
+        assert f["examples"] == ["512"]
+
+    def test_unit_still_in_constraints(self) -> None:
+        fields = DocumentedSchema.to_field_definitions()
+        f = next(f for f in fields if f["name"] == "yield_strength")
+        assert f["constraints"]["unit"] == "MPa"
+        # examples must NOT leak into the constraints block
+        assert "examples" not in f["constraints"]
+
+    def test_undocumented_field_has_no_new_keys(self) -> None:
+        fields = DocumentedSchema.to_field_definitions()
+        f = next(f for f in fields if f["name"] == "alloy")
+        assert "description" not in f
+        assert "examples" not in f

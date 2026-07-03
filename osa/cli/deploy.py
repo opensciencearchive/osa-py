@@ -343,6 +343,46 @@ def _hook_to_definition(
     }
 
 
+_MIN_DISTINCT_TRIGGER_QUESTIONS = 3
+
+
+def _docs_gaps(conv: ConventionInfo) -> list[str]:
+    """Missing-documentation gaps for one convention (mirror of the server rule)."""
+    gaps: list[str] = []
+    if not conv.purpose.strip():
+        gaps.append("purpose (must be non-empty)")
+    distinct = {q.strip() for q in conv.example_questions if q.strip()}
+    distinct |= {e.question.strip() for e in conv.examples if e.question.strip()}
+    if len(distinct) < _MIN_DISTINCT_TRIGGER_QUESTIONS:
+        gaps.append(
+            f"trigger questions (need ≥ {_MIN_DISTINCT_TRIGGER_QUESTIONS} distinct "
+            f"across example_questions + worked examples, got {len(distinct)})"
+        )
+    if not conv.examples:
+        gaps.append(f"examples (need ≥ 1 Example, got {len(conv.examples)})")
+    return gaps
+
+
+def _check_docs_gate(conventions: list[ConventionInfo]) -> None:
+    """Pre-flight mirror of the server's mandatory-docs gate (#151).
+
+    Fails before any image build/push or network call, naming each gap. The
+    node's 422 is the source of truth; this is fast feedback only.
+    """
+    for conv in conventions:
+        gaps = _docs_gaps(conv)
+        if gaps:
+            gap_lines = "\n".join(f"    - {g}" for g in gaps)
+            raise DeployError(
+                f'deploy blocked: convention "{conv.title}" is missing required '
+                f"documentation:\n{gap_lines}",
+                hint=(
+                    "Supply them on convention(). Documentation is mandatory — "
+                    "there is no skip flag."
+                ),
+            )
+
+
 def _convention_to_payload(
     conv: ConventionInfo,
     hook_definitions: list[dict[str, Any]],
@@ -394,6 +434,13 @@ def _convention_to_payload(
         "file_requirements": file_reqs,
         "hooks": hook_definitions,
         "ingester": ingester,
+        "docs": {
+            "purpose": conv.purpose,
+            "example_questions": conv.example_questions,
+            "examples": [e.model_dump() for e in conv.examples],
+            "when_not_to_use": conv.when_not_to_use,
+            "see_also": conv.see_also,
+        },
     }
 
 
@@ -477,6 +524,9 @@ def deploy(
             "No conventions registered. "
             "Make sure the convention package is imported before calling deploy."
         )
+
+    # Mandatory-docs pre-flight — before any image build/push or network call.
+    _check_docs_gate(_conventions)
 
     started_at = time.monotonic()
     ingester_names = list(
