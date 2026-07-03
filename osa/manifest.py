@@ -12,6 +12,7 @@ from typing import Any, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
 from osa._registry import HookInfo, _hooks
 
@@ -96,16 +97,16 @@ def _resolve_json_type(annotation: Any) -> tuple[str, str | None]:
     return ("string", None)
 
 
-def _is_required(field_info: Any) -> bool:
+def _is_required(field_info: FieldInfo) -> bool:
     """Determine if a Pydantic field is required (non-optional)."""
     return field_info.is_required()
 
 
-def _column_unit(field_info: Any) -> str | None:
+def _column_unit(field_info: FieldInfo) -> str | None:
     """Measurement unit from ``json_schema_extra["unit"]``, if declared."""
     extra = field_info.json_schema_extra
     if isinstance(extra, dict):
-        unit = extra.get("unit")
+        unit = dict(extra).get("unit")
         if isinstance(unit, str):
             return unit
     return None

@@ -56,6 +56,15 @@ def fake_hook(record):
 fake_hook.__name__ = "detect_pockets"
 
 
+def _docs_kwargs() -> dict:
+    """Minimal valid docs — ConventionInfo requires them (#151)."""
+    return {
+        "purpose": "Test data for payload tests.",
+        "example_questions": ["q1?", "q2?", "q3?"],
+        "examples": [Example(question="q1?", query="GET /x", interpretation="means x")],
+    }
+
+
 class TestConventionToPayload:
     def test_builds_payload_with_schema_fields(self) -> None:
         from osa.cli.deploy import _convention_to_payload
@@ -72,6 +81,7 @@ class TestConventionToPayload:
             },
             hooks=[],
             ingester_info=None,
+            **_docs_kwargs(),
         )
 
         payload = _convention_to_payload(conv, [])
@@ -100,6 +110,7 @@ class TestConventionToPayload:
             },
             hooks=[],
             ingester_info=ingester_info,
+            **_docs_kwargs(),
         )
 
         payload = _convention_to_payload(
@@ -130,6 +141,7 @@ class TestConventionToPayload:
             file_requirements={"accepted_types": [".csv"]},
             hooks=[],
             ingester_info=None,
+            **_docs_kwargs(),
         )
 
         payload = _convention_to_payload(conv, [])
@@ -149,6 +161,7 @@ class TestConventionToPayload:
             file_requirements={"accepted_types": [".cif"]},
             hooks=[],
             ingester_info=ingester_info,
+            **_docs_kwargs(),
         )
 
         payload = _convention_to_payload(conv, [])
@@ -169,6 +182,7 @@ class TestConventionToPayload:
             },
             hooks=[],
             ingester_info=None,
+            **_docs_kwargs(),
         )
 
         payload = _convention_to_payload(conv, [])
@@ -207,6 +221,7 @@ class TestConventionToPayload:
             },
             hooks=[fake_hook],
             ingester_info=None,
+            **_docs_kwargs(),
         )
 
         payload = _convention_to_payload(conv, hook_defs)

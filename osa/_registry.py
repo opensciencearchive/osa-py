@@ -39,13 +39,14 @@ class IngesterInfo:
     max_file_mb: float | None = None
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ConventionInfo:
     """Metadata from a convention() declaration.
 
-    ``purpose``/``examples`` default empty only at this internal layer —
-    ``convention()`` requires them, and the deploy pre-flight rejects an
-    undocumented ConventionInfo before any build or network call (#151).
+    ``purpose`` and ``examples`` are required — documentation is mandatory
+    (#151), so an undocumented ConventionInfo is unrepresentable. The deploy
+    pre-flight validates their *content* (non-blank, trigger breadth) before
+    any build or network call.
     """
 
     title: str
@@ -54,10 +55,10 @@ class ConventionInfo:
     schema_type: type[MetadataSchema]
     file_requirements: dict[str, Any]
     hooks: list[types.FunctionType]
-    ingester_info: IngesterInfo | None = None
-    purpose: str = ""
-    examples: list[Example] = field(default_factory=list)
+    purpose: str
+    examples: list[Example]
     example_questions: list[str] = field(default_factory=list)
+    ingester_info: IngesterInfo | None = None
     when_not_to_use: str | None = None
     see_also: list[str] | None = None
 
