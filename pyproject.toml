@@ -1,6 +1,6 @@
 [project]
 name = "osa-py"
-version = "0.4.0"
+version = "0.5.0"
 description = "OSA Python SDK — validators and transforms for the Open Scientific Archive"
 readme = "README.md"
 license = "Apache-2.0"
