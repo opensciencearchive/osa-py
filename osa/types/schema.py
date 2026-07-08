@@ -88,6 +88,13 @@ class MetadataSchema(BaseModel):
                 "cardinality": "exactly_one",
             }
 
+            if field_info.description:
+                field_def["description"] = field_info.description
+
+            examples = _field_examples(field_info)
+            if examples:
+                field_def["examples"] = examples
+
             # Build constraints (discriminated union with "type" key)
             constraints: dict[str, Any] | None = None
             if field_type == "number":
@@ -101,13 +108,27 @@ class MetadataSchema(BaseModel):
             elif field_type == "text":
                 extra = field_info.json_schema_extra
                 if isinstance(extra, dict):
-                    constraints = {"type": "text", **extra}
+                    text_extra = {k: v for k, v in extra.items() if k != "examples"}
+                    if text_extra:
+                        constraints = {"type": "text", **text_extra}
 
             if constraints:
                 field_def["constraints"] = constraints
 
             result.append(field_def)
         return result
+
+
+def _field_examples(field_info: FieldInfo) -> list[str]:
+    """Representative values for a field: native pydantic ``examples`` or
+    ``json_schema_extra["examples"]``, normalized to strings."""
+    examples: list[Any] | None = field_info.examples
+    if not examples:
+        extra = field_info.json_schema_extra
+        if isinstance(extra, dict):
+            raw = dict(extra).get("examples")
+            examples = raw if isinstance(raw, list) else None
+    return [str(e) for e in examples] if examples else []
 
 
 def _unwrap_optional(annotation: Any) -> type:

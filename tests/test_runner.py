@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+
 from pydantic import BaseModel
 
 from osa.types.record import Record
 from osa.types.schema import MetadataSchema
+
+
+def _test_docs_kwargs() -> dict:
+    """Minimal valid docs for convention() — mandatory since #151."""
+    from osa import Example
+
+    return {
+        "purpose": "Test data for unit tests.",
+        "example_questions": ["q1?", "q2?", "q3?"],
+        "examples": [Example(question="q1?", query="GET /x", interpretation="means x")],
+    }
 
 
 class RunnerSchema(MetadataSchema):
@@ -52,6 +64,7 @@ class TestRunTest:
             hooks=registered_hooks,
             ingester=ingester_cls,
             files={"accepted_types": [".txt"], "max_count": 1},
+            **_test_docs_kwargs(),
         )
 
         from osa._registry import _conventions

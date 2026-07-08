@@ -128,3 +128,54 @@ class TestFindSdkPath:
         from osa.cli.deploy import _find_sdk_path
 
         assert _find_sdk_path(tmp_path) is None
+
+
+class TestColumnMetadataEmission:
+    """#151: hook output column description/unit must reach the deploy payload."""
+
+    def test_generate_columns_emits_description_and_unit(self) -> None:
+        from pydantic import BaseModel
+        from pydantic import Field as PydanticField
+
+        from osa.manifest import generate_columns
+
+        class DuctilityRow(BaseModel):
+            transition_temp: float = PydanticField(
+                description="Ductile-brittle transition",
+                json_schema_extra={"unit": "°C"},
+            )
+            batch: str
+
+        columns = {c.name: c for c in generate_columns(DuctilityRow)}
+        assert columns["transition_temp"].description == "Ductile-brittle transition"
+        assert columns["transition_temp"].unit == "°C"
+        assert columns["batch"].description is None
+        assert columns["batch"].unit is None
+
+    def test_hook_definition_carries_column_metadata(self) -> None:
+        from pydantic import BaseModel
+        from pydantic import Field as PydanticField
+
+        from osa._registry import HookInfo
+        from osa.cli.deploy import _hook_to_definition
+
+        class Row(BaseModel):
+            score: float = PydanticField(
+                description="Pocket score", json_schema_extra={"unit": "kcal/mol"}
+            )
+
+        def fn(record):
+            pass
+
+        info = HookInfo(
+            fn=fn,  # type: ignore[arg-type]
+            name="detect",
+            hook_type="feature",
+            schema_type=None,  # type: ignore[arg-type]
+            output_type=Row,
+            cardinality="many",
+        )
+        definition = _hook_to_definition(info, "img:latest", "sha256:abc", "git:abc")
+        col = definition["feature"]["columns"][0]
+        assert col["description"] == "Pocket score"
+        assert col["unit"] == "kcal/mol"

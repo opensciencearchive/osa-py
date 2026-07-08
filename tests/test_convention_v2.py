@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
@@ -10,6 +11,17 @@ from pydantic import BaseModel
 
 from osa.types.record import Record
 from osa.types.schema import MetadataSchema
+
+
+def _test_docs_kwargs() -> dict:
+    """Minimal valid docs for convention() — mandatory since #151."""
+    from osa import Example
+
+    return {
+        "purpose": "Test data for unit tests.",
+        "example_questions": ["q1?", "q2?", "q3?"],
+        "examples": [Example(question="q1?", query="GET /x", interpretation="means x")],
+    }
 
 
 class SampleSchema(MetadataSchema):
@@ -45,6 +57,7 @@ class TestConventionVersion:
             schema=SampleSchema,
             files={"accepted_types": [".cif"]},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].version == "1.0.0"
 
@@ -84,6 +97,7 @@ class TestConventionVersion:
             ingester=MyIngester,
             files={"accepted_types": [".cif"]},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].ingester_info is not None
         assert _conventions[0].ingester_info.ingester_cls is MyIngester
@@ -124,6 +138,7 @@ class TestConventionVersion:
             ingester=MyIngester,
             files={"accepted_types": [".cif"]},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].ingester_info is not None
         assert _conventions[0].ingester_info.name == "test-ingester"
@@ -145,6 +160,7 @@ class TestConventionVersion:
             schema=SampleSchema,
             files={},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         assert _conventions[0].ingester_info is None
 
@@ -171,6 +187,7 @@ class TestManifestWithVersion:
             schema=SampleSchema,
             files={},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         m = generate_manifest()
         assert m.conventions[0].version == "2.1.0"
@@ -211,6 +228,7 @@ class TestManifestWithVersion:
             ingester=MyIngester,
             files={},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         m = generate_manifest()
         assert m.conventions[0].ingester_name == "my-ingester"
@@ -231,6 +249,7 @@ class TestManifestWithVersion:
             schema=SampleSchema,
             files={},
             hooks=[detect],
+            **_test_docs_kwargs(),
         )
         m = generate_manifest()
         assert m.conventions[0].ingester_name is None
