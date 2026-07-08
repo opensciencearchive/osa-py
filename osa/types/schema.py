@@ -142,12 +142,16 @@ def _unwrap_optional(annotation: Any) -> type:
     return annotation
 
 
-def Field(*, unit: str | None = None, **kwargs: Any) -> FieldInfo:
+def Field(*, unit: str | None = None, **kwargs: Any) -> Any:
     """Declare a metadata field with optional unit annotation.
 
     Thin wrapper around :func:`pydantic.Field` that adds an optional
     ``unit`` keyword. The unit value is stored in ``json_schema_extra``
     and appears in the generated JSON Schema.
+
+    Returns ``Any`` (like :func:`pydantic.Field`) so a typed field default
+    ``name: T = Field(...)`` type-checks instead of tripping an
+    assignment-type error.
     """
     extra: dict[str, Any] = kwargs.pop("json_schema_extra", None) or {}
     if unit is not None:
