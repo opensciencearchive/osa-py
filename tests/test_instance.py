@@ -54,6 +54,67 @@ class TestMintDevToken:
         t2 = _mint_dev_token()
         assert t1 != t2
 
+    def test_signs_with_given_secret(self) -> None:
+        import base64
+        import hashlib
+        import hmac
+
+        token = _mint_dev_token("my-custom-secret")
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        message = f"{header_b64}.{payload_b64}".encode()
+        expected = hmac.new(b"my-custom-secret", message, hashlib.sha256).digest()
+        got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
+        assert got == expected
+
+
+class TestEffectiveJwtSecret:
+    """`osa start` must mint with the secret the local server actually uses."""
+
+    def test_falls_back_to_dev_secret_when_no_env(self, tmp_path: Path) -> None:
+        from osa.cli.instance import DEV_JWT_SECRET, _effective_jwt_secret
+
+        assert _effective_jwt_secret(tmp_path) == DEV_JWT_SECRET
+
+    def test_reads_jwt_secret_from_env(self, tmp_path: Path) -> None:
+        from osa.cli.instance import _effective_jwt_secret
+
+        (tmp_path / ".env").write_text(
+            "POSTGRES_PASSWORD=pw\nJWT_SECRET=custom-cloud-secret\n"
+        )
+        assert _effective_jwt_secret(tmp_path) == "custom-cloud-secret"
+
+    def test_osa_auth_var_takes_precedence(self, tmp_path: Path) -> None:
+        from osa.cli.instance import _effective_jwt_secret
+
+        (tmp_path / ".env").write_text(
+            "JWT_SECRET=mapped\nOSA_AUTH__JWT__SECRET=direct\n"
+        )
+        assert _effective_jwt_secret(tmp_path) == "direct"
+
+    def test_strips_quotes(self, tmp_path: Path) -> None:
+        from osa.cli.instance import _effective_jwt_secret
+
+        (tmp_path / ".env").write_text('JWT_SECRET="quoted-secret"\n')
+        assert _effective_jwt_secret(tmp_path) == "quoted-secret"
+
+    def test_minted_token_verifies_against_env_secret(self, tmp_path: Path) -> None:
+        # End-to-end: a token minted from the effective secret validates with
+        # that same secret — the exact coupling the server enforces.
+        import base64
+        import hashlib
+        import hmac
+
+        from osa.cli.instance import _effective_jwt_secret, _mint_dev_token
+
+        (tmp_path / ".env").write_text("JWT_SECRET=the-real-secret\n")
+        secret = _effective_jwt_secret(tmp_path)
+        token = _mint_dev_token(secret)
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        message = f"{header_b64}.{payload_b64}".encode()
+        expected = hmac.new(secret.encode(), message, hashlib.sha256).digest()
+        got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
+        assert got == expected
+
 
 class TestHelpers:
     def test_compose_template_path_exists(self) -> None:
