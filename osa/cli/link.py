@@ -50,18 +50,27 @@ def read_link(*, project_dir: Path | None = None) -> str | None:
         return None
 
 
-def resolve_server(*, flag: str | None = None, project_dir: Path | None = None) -> str:
-    """Resolve server URL: --server flag → OSA_SERVER env → .osa/config.json → error."""
+def resolve_server_with_source(
+    *, flag: str | None = None, project_dir: Path | None = None
+) -> tuple[str, str]:
+    """Resolve the server URL and report where it came from.
+
+    Returns ``(url, source)`` where source is a human-readable origin
+    (``--server flag`` / ``OSA_SERVER env`` / ``.osa/config.json``). Callers
+    surface the source so a misdirected deploy (e.g. cloud vs. local) is
+    visible before any build or network call. Exits with a usage error if no
+    server can be resolved.
+    """
     if flag:
-        return flag.rstrip("/")
+        return flag.rstrip("/"), "--server flag"
 
     env = os.environ.get("OSA_SERVER")
     if env:
-        return env.rstrip("/")
+        return env.rstrip("/"), "OSA_SERVER env"
 
     linked = read_link(project_dir=project_dir)
     if linked:
-        return linked
+        return linked, ".osa/config.json"
 
     print(
         "Error: No server specified. Use --server <url>, set OSA_SERVER, "
@@ -69,3 +78,9 @@ def resolve_server(*, flag: str | None = None, project_dir: Path | None = None) 
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+def resolve_server(*, flag: str | None = None, project_dir: Path | None = None) -> str:
+    """Resolve server URL: --server flag → OSA_SERVER env → .osa/config.json → error."""
+    url, _ = resolve_server_with_source(flag=flag, project_dir=project_dir)
+    return url

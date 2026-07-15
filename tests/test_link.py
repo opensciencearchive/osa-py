@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from osa.cli.link import read_link, resolve_server, write_link
+from osa.cli.link import (
+    read_link,
+    resolve_server,
+    resolve_server_with_source,
+    write_link,
+)
 
 
 class TestWriteLink:
@@ -119,3 +124,31 @@ class TestResolveServer:
 
         result = resolve_server(project_dir=tmp_path)
         assert result == "https://example.com"
+
+
+class TestResolveServerWithSource:
+    """The source string lets the CLI show which server it targeted."""
+
+    def test_flag_source(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("OSA_SERVER", "https://env.com")
+
+        url, source = resolve_server_with_source(
+            flag="https://flag.com", project_dir=tmp_path
+        )
+        assert url == "https://flag.com"
+        assert source == "--server flag"
+
+    def test_env_source(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("OSA_SERVER", "https://env.com")
+
+        url, source = resolve_server_with_source(project_dir=tmp_path)
+        assert url == "https://env.com"
+        assert source == "OSA_SERVER env"
+
+    def test_config_source(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("OSA_SERVER", raising=False)
+        write_link("https://config.com", project_dir=tmp_path)
+
+        url, source = resolve_server_with_source(project_dir=tmp_path)
+        assert url == "https://config.com"
+        assert source == ".osa/config.json"
