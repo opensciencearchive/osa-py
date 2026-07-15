@@ -2,8 +2,108 @@
 
 from __future__ import annotations
 
+import io
+from unittest.mock import patch
 
+import httpx
 import pytest
+
+
+def _quiet_ui():
+    from osa.cli.ui import UI
+
+    return UI.create(file=io.StringIO(), force_plain=True)
+
+
+def _auth_response(status: int, body: dict) -> httpx.Response:
+    request = httpx.Request("GET", "http://localhost:8000/api/v1/auth/me")
+    return httpx.Response(status, json=body, request=request)
+
+
+class TestAuthPreflight:
+    """`osa deploy` verifies the token against the server before any build."""
+
+    def test_success_returns_quietly(self) -> None:
+        from osa.cli.deploy import _check_auth
+
+        resp = _auth_response(200, {"display_name": "Rory", "roles": ["superadmin"]})
+        with patch("osa.cli.deploy.httpx.get", return_value=resp):
+            # No raise == success.
+            _check_auth("http://localhost:8000", "good-token", _quiet_ui())
+
+    def test_invalid_token_raises_with_signature_hint(self) -> None:
+        from osa.cli.deploy import DeployError, _check_auth
+
+        resp = _auth_response(401, {"detail": {"code": "invalid_token"}})
+        with patch("osa.cli.deploy.httpx.get", return_value=resp):
+            with pytest.raises(DeployError) as exc_info:
+                _check_auth("http://localhost:8000", "bad-sig", _quiet_ui())
+        assert "Authentication failed (401)" in str(exc_info.value)
+        assert "signature" in (exc_info.value.hint or "")
+        assert "osa start" in (exc_info.value.hint or "")
+
+    def test_expired_token_hint(self) -> None:
+        from osa.cli.deploy import DeployError, _check_auth
+
+        resp = _auth_response(401, {"detail": {"code": "token_expired"}})
+        with patch("osa.cli.deploy.httpx.get", return_value=resp):
+            with pytest.raises(DeployError) as exc_info:
+                _check_auth("http://localhost:8000", "stale", _quiet_ui())
+        assert "expired" in (exc_info.value.hint or "").lower()
+
+    def test_network_error_raises_unreachable(self) -> None:
+        from osa.cli.deploy import DeployError, _check_auth
+
+        with patch(
+            "osa.cli.deploy.httpx.get",
+            side_effect=httpx.ConnectError("refused"),
+        ):
+            with pytest.raises(DeployError) as exc_info:
+                _check_auth("http://localhost:8000", "tok", _quiet_ui())
+        assert "Could not reach" in str(exc_info.value)
+
+    def test_aborts_before_any_build(self) -> None:
+        from osa._registry import clear
+        from osa.authoring.convention import convention
+        from osa.cli.deploy import DeployError, deploy
+        from osa.types.schema import MetadataSchema
+
+        clear()
+
+        class PreflightSchema(MetadataSchema):
+            __schema_id__ = "preflight-schema"
+
+            organism: str
+
+        from osa import Example
+
+        convention(
+            title="Preflight Convention",
+            description="x",
+            version="1.0.0",
+            schema=PreflightSchema,
+            files={},
+            hooks=[],
+            purpose="Test data.",
+            example_questions=["q1?", "q2?", "q3?"],
+            examples=[
+                Example(question="q1?", query="GET /x", interpretation="means x")
+            ],
+        )
+
+        resp = _auth_response(401, {"detail": {"code": "invalid_token"}})
+        with (
+            patch("osa.cli.deploy._build_hook_image") as build,
+            patch("osa.cli.deploy.httpx.get", return_value=resp),
+            patch("osa.cli.deploy.httpx.post") as post,
+        ):
+            build.side_effect = AssertionError("image build ran before auth gate")
+            post.side_effect = AssertionError("registration ran before auth gate")
+            with pytest.raises(DeployError, match="Authentication failed"):
+                deploy(server="http://localhost:8000", token="bad-token")
+
+        assert build.call_count == 0
+        assert post.call_count == 0
 
 
 class TestDockerfileGeneration:

@@ -469,6 +469,85 @@ def _resolve_existing_image(tag: str) -> tuple[str, str]:
     return tag, digest
 
 
+_AUTH_HINTS = {
+    "token_expired": (
+        "Your token has expired. Run `osa login` (or `osa start` for a local dev "
+        "archive) to refresh it."
+    ),
+    "invalid_token": (
+        "The server rejected the token signature — it was minted for a different JWT "
+        "secret. For a local archive run `osa stop && osa start`; otherwise `osa login`."
+    ),
+    "missing_token": "Run `osa login` to authenticate.",
+}
+
+
+def _check_auth(server: str, token: str, ui: UI) -> None:
+    """Verify the token against the server before any build (pre-flight).
+
+    Probes ``GET /api/v1/auth/me``, which returns distinct 401 codes
+    (``missing_token`` / ``token_expired`` / ``invalid_token``) so we can give a
+    code-specific remediation hint. Raises ``DeployError`` on any auth or network
+    failure; returns quietly (with a confirming UI line) on success.
+    """
+    url = f"{server.rstrip('/')}/api/v1/auth/me"
+    headers = {"Authorization": f"Bearer {token}"}
+    with ui.task("Verifying credentials") as task:
+        try:
+            resp = httpx.get(url, headers=headers, timeout=15.0)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in (401, 403):
+                code = _auth_error_code(e.response)
+                task.fail("authentication failed")
+                raise DeployError(
+                    f"Authentication failed ({status})",
+                    cause=e.response.text[:2000],
+                    hint=_AUTH_HINTS.get(code, _AUTH_HINTS["missing_token"]),
+                ) from e
+            task.fail(f"auth check failed ({status})")
+            raise DeployError(
+                f"Auth check failed ({status})",
+                cause=e.response.text[:2000],
+            ) from e
+        except httpx.HTTPError as e:
+            task.fail("could not reach server")
+            raise DeployError(
+                f"Could not reach {server}",
+                cause=str(e),
+                hint="Check the server URL and your network connection",
+            ) from e
+        task.done(detail=_identity_detail(resp))
+
+
+def _auth_error_code(response: httpx.Response) -> str | None:
+    """Extract the server's structured auth error ``code``, if present."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        return None
+    if isinstance(detail, dict):
+        code = detail.get("code")
+        return code if isinstance(code, str) else None
+    return None
+
+
+def _identity_detail(response: httpx.Response) -> str | None:
+    """A short 'who am I' label from the /auth/me body, or None if unavailable."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    name = body.get("display_name") or body.get("external_id")
+    roles = body.get("roles")
+    if name and isinstance(roles, list) and roles:
+        return f"{name} ({', '.join(str(r) for r in roles)})"
+    return str(name) if name else None
+
+
 def _register_convention(
     conv: ConventionInfo,
     payload: dict[str, Any],
@@ -527,6 +606,11 @@ def deploy(
 
     # Mandatory-docs pre-flight — before any image build/push or network call.
     _check_docs_gate(_conventions)
+
+    # Auth pre-flight — verify the token against the server before any build, so a
+    # bad/expired token fails in ~1s instead of after 10 image builds.
+    if token:
+        _check_auth(server, token, ui)
 
     started_at = time.monotonic()
     ingester_names = list(
