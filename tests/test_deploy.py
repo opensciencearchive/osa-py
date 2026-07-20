@@ -51,6 +51,18 @@ class TestAuthPreflight:
                 _check_auth("http://localhost:8000", "stale", _quiet_ui())
         assert "expired" in (exc_info.value.hint or "").lower()
 
+    def test_non_dict_json_body_falls_back_to_default_hint(self) -> None:
+        # A proxy may return a bare JSON string / list / null on 401; the code
+        # extractor must not raise, and we fall back to the generic hint.
+        from osa.cli.deploy import DeployError, _check_auth
+
+        resp = _auth_response(401, "Unauthorized")
+        with patch("osa.cli.deploy.httpx.get", return_value=resp):
+            with pytest.raises(DeployError) as exc_info:
+                _check_auth("http://localhost:8000", "tok", _quiet_ui())
+        assert "Authentication failed (401)" in str(exc_info.value)
+        assert "osa login" in (exc_info.value.hint or "")
+
     def test_network_error_raises_unreachable(self) -> None:
         from osa.cli.deploy import DeployError, _check_auth
 

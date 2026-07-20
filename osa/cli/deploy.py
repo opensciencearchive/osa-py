@@ -524,9 +524,12 @@ def _check_auth(server: str, token: str, ui: UI) -> None:
 def _auth_error_code(response: httpx.Response) -> str | None:
     """Extract the server's structured auth error ``code``, if present."""
     try:
-        detail = response.json().get("detail")
+        body = response.json()
     except ValueError:
         return None
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("detail")
     if isinstance(detail, dict):
         code = detail.get("code")
         return code if isinstance(code, str) else None
