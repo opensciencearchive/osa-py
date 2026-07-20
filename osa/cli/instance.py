@@ -138,7 +138,41 @@ DEV_JWT_SECRET = (
 )
 
 
-def _mint_dev_token() -> str:
+def _read_env_file(path: Path) -> dict[str, str]:
+    """Minimal ``.env`` reader: ``KEY=value`` lines, ``#`` comments, quotes stripped.
+
+    Only what we need to learn the local server's JWT secret; docker compose
+    remains the real consumer of the file via ``--env-file``.
+    """
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip().strip('"').strip("'")
+    return env
+
+
+def _effective_jwt_secret(project_dir: Path) -> str:
+    """The secret the *local server* will validate JWTs with.
+
+    The compose template maps ``OSA_AUTH__JWT__SECRET: ${JWT_SECRET}`` (see
+    ``templates/docker-compose.yml``), so the container always validates with
+    the project ``.env``'s ``JWT_SECRET`` — a raw ``OSA_AUTH__JWT__SECRET`` in
+    ``.env`` is overridden by that mapping and never reaches the server. We
+    therefore mint against ``JWT_SECRET`` so the token always matches, falling
+    back to the well-known dev secret when it is unset. This is what keeps
+    ``osa start; osa deploy`` working after an operator sets a custom secret —
+    the minter and the server share one source of truth.
+    """
+    env = _read_env_file(project_dir / ".env")
+    return env.get("JWT_SECRET") or DEV_JWT_SECRET
+
+
+def _mint_dev_token(secret: str = DEV_JWT_SECRET) -> str:
     header = json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":"))
     payload = json.dumps(
         {
@@ -155,13 +189,13 @@ def _mint_dev_token() -> str:
     header_b64 = _b64url(header.encode())
     payload_b64 = _b64url(payload.encode())
     message = f"{header_b64}.{payload_b64}".encode()
-    signature = hmac.new(DEV_JWT_SECRET.encode(), message, hashlib.sha256).digest()
+    signature = hmac.new(secret.encode(), message, hashlib.sha256).digest()
     return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
 
 
-def _store_dev_credentials() -> None:
-    """Mint a dev token signed with the well-known dev secret, store it."""
-    token = _mint_dev_token()
+def _store_dev_credentials(project_dir: Path) -> None:
+    """Mint a dev token signed with the local server's effective secret, store it."""
+    token = _mint_dev_token(_effective_jwt_secret(project_dir))
 
     from osa.cli.credentials import write_credentials
 
@@ -189,6 +223,10 @@ LOG_LEVEL=INFO
 # with the placeholder JWT_SECRET below and mints a SUPERADMIN dev token so
 # `osa deploy` is authenticated out of the box. Set to false and supply a real
 # JWT_SECRET + ORCID credentials for non-local deployments.
+#
+# `osa start` signs its dev token with whatever JWT_SECRET is set here, so you
+# may change this value and local auth keeps working — the minted token and the
+# server stay in sync. (Prod/cloud uses its own secret, configured separately.)
 OSA_DEV_MODE=true
 JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION-not-suitable-for-real-use
 
@@ -366,7 +404,7 @@ def start_instance(
     from osa.cli.link import write_link
 
     write_link(LOCAL_SERVER_URL, project_dir=project_dir)
-    _store_dev_credentials()
+    _store_dev_credentials(project_dir)
 
     env = {**os.environ, "OSA_IMAGE_VERSION": image_version}
 

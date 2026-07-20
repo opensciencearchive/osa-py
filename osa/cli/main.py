@@ -165,23 +165,33 @@ def deploy(
     import importlib.metadata
 
     from osa.cli.deploy import DeployError, deploy as do_deploy
-    from osa.cli.link import resolve_server
+    from osa.cli.link import resolve_server_with_source
 
     ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
         importlib.import_module(ep.value)
 
-    server_url = resolve_server(flag=server)
+    server_url, server_source = resolve_server_with_source(flag=server)
     resolved_token = token
+    token_source = "--token flag"
 
     if not resolved_token:
+        import os
+
         from osa.cli.credentials import resolve_token
 
         resolved_token = resolve_token(server_url)
+        token_source = (
+            "OSA_TOKEN env" if os.environ.get("OSA_TOKEN") else "stored login"
+        )
         if resolved_token is None:
             ui.error("Not authenticated", hint="Run `osa login` first")
             raise typer.Exit(1)
+
+    # Surface the target before any build/push so a misdirected deploy (e.g.
+    # cloud vs. local) is obvious. Credentials are keyed to this exact URL.
+    ui.info(f"Deploying to {server_url} (from {server_source}, auth: {token_source})")
 
     try:
         do_deploy(
