@@ -159,16 +159,17 @@ def _read_env_file(path: Path) -> dict[str, str]:
 def _effective_jwt_secret(project_dir: Path) -> str:
     """The secret the *local server* will validate JWTs with.
 
-    Read from the project's ``.env`` so a minted token always matches the
-    running server, whatever secret is configured (``OSA_AUTH__JWT__SECRET``
-    takes precedence over the compose-mapped ``JWT_SECRET``, mirroring the
-    server's pydantic-settings precedence). Falls back to the well-known dev
-    secret when neither is set. This is what keeps ``osa start; osa deploy``
-    working after an operator sets a custom secret — the minter and the server
-    share one source of truth instead of a hardcoded constant.
+    The compose template maps ``OSA_AUTH__JWT__SECRET: ${JWT_SECRET}`` (see
+    ``templates/docker-compose.yml``), so the container always validates with
+    the project ``.env``'s ``JWT_SECRET`` — a raw ``OSA_AUTH__JWT__SECRET`` in
+    ``.env`` is overridden by that mapping and never reaches the server. We
+    therefore mint against ``JWT_SECRET`` so the token always matches, falling
+    back to the well-known dev secret when it is unset. This is what keeps
+    ``osa start; osa deploy`` working after an operator sets a custom secret —
+    the minter and the server share one source of truth.
     """
     env = _read_env_file(project_dir / ".env")
-    return env.get("OSA_AUTH__JWT__SECRET") or env.get("JWT_SECRET") or DEV_JWT_SECRET
+    return env.get("JWT_SECRET") or DEV_JWT_SECRET
 
 
 def _mint_dev_token(secret: str = DEV_JWT_SECRET) -> str:

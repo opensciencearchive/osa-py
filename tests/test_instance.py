@@ -83,13 +83,16 @@ class TestEffectiveJwtSecret:
         )
         assert _effective_jwt_secret(tmp_path) == "custom-cloud-secret"
 
-    def test_osa_auth_var_takes_precedence(self, tmp_path: Path) -> None:
+    def test_jwt_secret_wins_over_raw_osa_auth_var(self, tmp_path: Path) -> None:
+        # The compose template maps OSA_AUTH__JWT__SECRET: ${JWT_SECRET}, so a
+        # raw OSA_AUTH__JWT__SECRET in .env never reaches the container — the
+        # server validates with JWT_SECRET, and that is what we must sign with.
         from osa.cli.instance import _effective_jwt_secret
 
         (tmp_path / ".env").write_text(
             "JWT_SECRET=mapped\nOSA_AUTH__JWT__SECRET=direct\n"
         )
-        assert _effective_jwt_secret(tmp_path) == "direct"
+        assert _effective_jwt_secret(tmp_path) == "mapped"
 
     def test_strips_quotes(self, tmp_path: Path) -> None:
         from osa.cli.instance import _effective_jwt_secret
@@ -114,6 +117,13 @@ class TestEffectiveJwtSecret:
         expected = hmac.new(secret.encode(), message, hashlib.sha256).digest()
         got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
         assert got == expected
+
+    def test_compose_maps_server_secret_from_jwt_secret(self) -> None:
+        # Guards the coupling `_effective_jwt_secret` relies on: the server's
+        # OSA_AUTH__JWT__SECRET is fed from .env's JWT_SECRET. If this mapping
+        # ever changes, minting against JWT_SECRET would silently break.
+        template = _compose_template_path().read_text()
+        assert "OSA_AUTH__JWT__SECRET: ${JWT_SECRET}" in template
 
 
 class TestHelpers:
