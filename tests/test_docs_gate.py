@@ -159,14 +159,13 @@ class TestDeployPayloadEmitsDocs:
 
     def test_payload_carries_required_docs_block(self) -> None:
         from osa._registry import _conventions
-        from osa.cli.deploy import _convention_to_payload
+        from osa.cli.deploy import build_manifest
 
         _register()
-        payload = _convention_to_payload(_conventions[0], [])
-        docs = payload["docs"]
-        assert docs["purpose"] == "Test data."
-        assert docs["example_questions"] == ["q1?", "q2?", "q3?"]
-        assert docs["examples"] == [
+        docs = build_manifest(_conventions[0]).docs
+        assert docs.purpose == "Test data."
+        assert docs.example_questions == ["q1?", "q2?", "q3?"]
+        assert [e.model_dump() for e in docs.examples] == [
             {"question": "question 0?", "query": "GET /x", "interpretation": "means x"}
         ]
 
@@ -187,8 +186,8 @@ class TestDeployPayloadEmitsDocs:
             when_not_to_use="Not for X.",
             see_also=["https://other-node.example.org"],
         )
-        from osa.cli.deploy import _convention_to_payload
+        from osa.cli.deploy import build_manifest
 
-        payload = _convention_to_payload(_conventions[0], [])
-        assert payload["docs"]["when_not_to_use"] == "Not for X."
-        assert payload["docs"]["see_also"] == ["https://other-node.example.org"]
+        docs = build_manifest(_conventions[0]).docs
+        assert docs.when_not_to_use == "Not for X."
+        assert docs.see_also == ["https://other-node.example.org"]

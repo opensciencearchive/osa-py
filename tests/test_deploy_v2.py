@@ -65,9 +65,9 @@ def _docs_kwargs() -> dict:
     }
 
 
-class TestConventionToPayload:
-    def test_builds_payload_with_schema_fields(self) -> None:
-        from osa.cli.deploy import _convention_to_payload
+class TestBuildManifest:
+    def test_builds_manifest_with_schema_fields(self) -> None:
+        from osa.cli.deploy import build_manifest
 
         conv = ConventionInfo(
             title="Test Convention",
@@ -84,17 +84,17 @@ class TestConventionToPayload:
             **_docs_kwargs(),
         )
 
-        payload = _convention_to_payload(conv, [])
-        assert payload["title"] == "Test Convention"
-        assert payload["description"] == "A test convention"
-        assert payload["schema"]["id"] == "fake-schema"
-        assert payload["schema"]["version"] == "1.0.0"
-        assert len(payload["schema"]["fields"]) == 2
-        assert payload["schema"]["fields"][0]["name"] == "title"
-        assert payload["ingester"] is None
+        manifest = build_manifest(conv)
+        assert manifest.title == "Test Convention"
+        assert manifest.description == "A test convention"
+        assert manifest.record_schema.id == "fake-schema"
+        assert manifest.record_schema.version == "1.0.0"
+        assert len(manifest.record_schema.fields) == 2
+        assert manifest.record_schema.fields[0].name == "title"
+        assert manifest.ingester is None
 
     def test_includes_ingester_definition(self) -> None:
-        from osa.cli.deploy import _convention_to_payload
+        from osa.cli.deploy import ComponentRelease, bind_releases, build_manifest
 
         ingester_info = IngesterInfo(ingester_cls=FakeIngester, name="test-ingester")
 
@@ -113,25 +113,37 @@ class TestConventionToPayload:
             **_docs_kwargs(),
         )
 
-        payload = _convention_to_payload(
-            conv,
-            [],
-            ingester_image=(
-                "osa-hooks-ingesters/test-ingester:latest",
-                "sha256:abc123",
+        # The manifest carries the ingester's authored definition (release-less).
+        manifest = build_manifest(conv)
+        assert manifest.ingester is not None
+        assert manifest.ingester.name == "test-ingester"
+        assert manifest.ingester.config == {"email": "", "batch_size": 100}
+        assert manifest.ingester.limits.timeout_seconds == 3600
+        assert manifest.ingester.release is None
+        # build artifacts live only under `release`, not flat on the ingester.
+        assert "image" not in type(manifest.ingester).model_fields
+
+        # Binding a built release nests it — symmetric with hooks (no flat image,
+        # config/limits/name stay on the ingester).
+        wire = bind_releases(
+            manifest,
+            {},
+            ComponentRelease(
+                image="osa-hooks-ingesters/test-ingester:latest",
+                digest="sha256:abc123",
+                source_ref="git:x",
             ),
-        )
-        assert payload["ingester"] is not None
-        assert (
-            payload["ingester"]["image"] == "osa-hooks-ingesters/test-ingester:latest"
-        )
-        assert payload["ingester"]["digest"] == "sha256:abc123"
-        assert payload["ingester"]["runner"] == "oci"
-        assert payload["ingester"]["config"] == {"email": "", "batch_size": 100}
-        assert payload["ingester"]["limits"]["timeout_seconds"] == 3600
+        ).model_dump(by_alias=True, exclude_none=True)
+        assert wire["ingester"]["release"] == {
+            "image": "osa-hooks-ingesters/test-ingester:latest",
+            "digest": "sha256:abc123",
+            "source_ref": "git:x",
+        }
+        assert wire["ingester"]["name"] == "test-ingester"
+        assert "config" in wire["ingester"] and "limits" in wire["ingester"]
 
     def test_ingester_none_when_no_ingester(self) -> None:
-        from osa.cli.deploy import _convention_to_payload
+        from osa.cli.deploy import build_manifest
 
         conv = ConventionInfo(
             title="Test",
@@ -144,12 +156,12 @@ class TestConventionToPayload:
             **_docs_kwargs(),
         )
 
-        payload = _convention_to_payload(conv, [])
-        assert payload["ingester"] is None
+        assert build_manifest(conv).ingester is None
 
-    def test_ingester_none_when_no_ingester_image_provided(self) -> None:
-        """Even with ingester_info, if no ingester_image tuple is given, ingester is None."""
-        from osa.cli.deploy import _convention_to_payload
+    def test_manifest_includes_ingester_without_a_build(self) -> None:
+        """The ingester is part of the definition, so it appears release-less in
+        the manifest even before any build (unlike the old deploy-only payload)."""
+        from osa.cli.deploy import bind_releases, build_manifest
 
         ingester_info = IngesterInfo(ingester_cls=FakeIngester, name="test-ingester")
 
@@ -164,11 +176,17 @@ class TestConventionToPayload:
             **_docs_kwargs(),
         )
 
-        payload = _convention_to_payload(conv, [])
-        assert payload["ingester"] is None
+        manifest = build_manifest(conv)
+        assert manifest.ingester is not None
+        # Release-less wire (no releases bound): present, named, no release.
+        wire = bind_releases(manifest, {}, None).model_dump(
+            by_alias=True, exclude_none=True
+        )
+        assert wire["ingester"]["name"] == "test-ingester"
+        assert "release" not in wire["ingester"]
 
     def test_adds_min_count_if_missing(self) -> None:
-        from osa.cli.deploy import _convention_to_payload
+        from osa.cli.deploy import build_manifest
 
         conv = ConventionInfo(
             title="Test",
@@ -185,29 +203,23 @@ class TestConventionToPayload:
             **_docs_kwargs(),
         )
 
-        payload = _convention_to_payload(conv, [])
-        assert payload["file_requirements"]["min_count"] == 0
+        assert build_manifest(conv).file_requirements.min_count == 0
 
     def test_includes_hook_definitions(self) -> None:
-        from osa.cli.deploy import _convention_to_payload
+        from osa._registry import _hooks
+        from osa.cli.deploy import ComponentRelease, bind_releases, build_manifest
 
-        hook_defs = [
-            {
-                "name": "detect_pockets",
-                "feature": {
-                    "kind": "table",
-                    "cardinality": "many",
-                    "columns": [],
-                },
-                "release": {
-                    "image": "osa-hooks/detect_pockets:latest",
-                    "digest": "sha256:abc123",
-                    "config": {},
-                    "limits": {"timeout_seconds": 300, "memory": "2g", "cpu": "2.0"},
-                    "source_ref": "git:abc1234",
-                },
-            }
-        ]
+        clear()
+        _hooks.append(
+            HookInfo(
+                fn=fake_hook,
+                name="detect_pockets",
+                hook_type="hook",
+                schema_type=FakeSchema,
+                output_type=None,
+                cardinality="many",
+            )
+        )
 
         conv = ConventionInfo(
             title="Test",
@@ -224,18 +236,35 @@ class TestConventionToPayload:
             **_docs_kwargs(),
         )
 
-        payload = _convention_to_payload(conv, hook_defs)
-        assert len(payload["hooks"]) == 1
-        assert (
-            payload["hooks"][0]["release"]["image"] == "osa-hooks/detect_pockets:latest"
-        )
+        manifest = build_manifest(conv)
+        assert len(manifest.hooks) == 1
+        assert manifest.hooks[0].name == "detect_pockets"
+
+        wire = bind_releases(
+            manifest,
+            {
+                "detect_pockets": ComponentRelease(
+                    image="osa-hooks/detect_pockets:latest",
+                    digest="sha256:abc123",
+                    source_ref="git:abc1234",
+                )
+            },
+            None,
+        ).model_dump(by_alias=True, exclude_none=True)
+        assert wire["hooks"][0]["release"] == {
+            "image": "osa-hooks/detect_pockets:latest",
+            "digest": "sha256:abc123",
+            "source_ref": "git:abc1234",
+        }
+        # config/limits are on the hook, not in release.
+        assert wire["hooks"][0]["config"] == {}
 
 
-class TestHookToDefinition:
-    def test_builds_hook_definition(self) -> None:
+class TestHookColumns:
+    def test_columns_from_output_model(self) -> None:
         from pydantic import BaseModel
 
-        from osa.cli.deploy import _hook_to_definition
+        from osa.cli.deploy import _hook_columns
 
         class Pocket(BaseModel):
             pocket_id: int
@@ -249,19 +278,10 @@ class TestHookToDefinition:
             output_type=Pocket,
             cardinality="many",
         )
-
-        defn = _hook_to_definition(
-            hook_info, "osa-hooks/detect_pockets:latest", "sha256:abc", "git:abc1234"
-        )
-        assert defn["release"]["image"] == "osa-hooks/detect_pockets:latest"
-        assert defn["release"]["digest"] == "sha256:abc"
-        assert defn["release"]["source_ref"] == "git:abc1234"
-        assert defn["name"] == "detect_pockets"
-        assert defn["feature"]["cardinality"] == "many"
-        assert len(defn["feature"]["columns"]) == 2
+        assert len(_hook_columns(hook_info)) == 2
 
     def test_empty_columns_when_no_output_type(self) -> None:
-        from osa.cli.deploy import _hook_to_definition
+        from osa.cli.deploy import _hook_columns
 
         hook_info = HookInfo(
             fn=fake_hook,
@@ -271,9 +291,7 @@ class TestHookToDefinition:
             output_type=None,
             cardinality="one",
         )
-
-        defn = _hook_to_definition(hook_info, "img:latest", "sha256:xyz", "git:unknown")
-        assert defn["feature"]["columns"] == []
+        assert _hook_columns(hook_info) == []
 
 
 class TestResolveSourceRef:
@@ -408,7 +426,10 @@ class TestDeployEndToEnd:
         assert payload["title"] == "PDB Structures"
         assert payload["schema"]["id"] == "fake-schema"
         assert payload["hooks"][0]["release"]["source_ref"].startswith("git:")
+        # config/limits are authored, on the component — not inside `release`.
+        assert payload["hooks"][0]["config"] == {}
+        assert "config" not in payload["hooks"][0]["release"]
         assert payload["ingester"] is not None
-        assert payload["ingester"]["runner"] == "oci"
+        assert payload["ingester"]["release"]["source_ref"].startswith("git:")
         assert payload["ingester"]["config"] == {"email": "", "batch_size": 100}
         assert "Bearer fake-jwt" in call_args[1]["headers"]["Authorization"]

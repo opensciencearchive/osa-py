@@ -264,12 +264,12 @@ class TestColumnMetadataEmission:
         assert columns["batch"].description is None
         assert columns["batch"].unit is None
 
-    def test_hook_definition_carries_column_metadata(self) -> None:
+    def test_hook_columns_carry_column_metadata(self) -> None:
         from pydantic import BaseModel
         from pydantic import Field as PydanticField
 
         from osa._registry import HookInfo
-        from osa.cli.deploy import _hook_to_definition
+        from osa.cli.deploy import _hook_columns
 
         class Row(BaseModel):
             score: float = PydanticField(
@@ -287,7 +287,235 @@ class TestColumnMetadataEmission:
             output_type=Row,
             cardinality="many",
         )
-        definition = _hook_to_definition(info, "img:latest", "sha256:abc", "git:abc")
-        col = definition["feature"]["columns"][0]
-        assert col["description"] == "Pocket score"
-        assert col["unit"] == "kcal/mol"
+        col = _hook_columns(info)[0]
+        assert col.description == "Pocket score"
+        assert col.unit == "kcal/mol"
+
+
+def _find_null(obj, path=""):
+    """Return the first JSON path holding a ``None``, else ``None`` (no nulls)."""
+    if obj is None:
+        return path or "<root>"
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            hit = _find_null(v, f"{path}.{k}")
+            if hit:
+                return hit
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            hit = _find_null(v, f"{path}[{i}]")
+            if hit:
+                return hit
+    return None
+
+
+class TestConventionManifest:
+    """One symmetric model: `build_manifest` + `bind_releases` + edge dump.
+
+    Hooks and ingesters are both `Component`s (authored config/limits + an
+    optional nested build `release`); the wire is produced by plain
+    `model_dump(by_alias=True, exclude_none=True)` — no custom serializers.
+    """
+
+    def _manifest(self):
+        from osa.cli.deploy import (
+            ConventionDocs,
+            ConventionManifest,
+            Feature,
+            Hook,
+            Ingester,
+            SchemaRef,
+        )
+        from osa.types.ingester import IngesterSchedule, Limits
+
+        return ConventionManifest(
+            title="T",
+            description="d",
+            schema=SchemaRef(id="s", version="1.0.0", fields=[]),
+            file_requirements={
+                "accepted_types": [".csv"],
+                "max_count": 3,
+                "max_file_size": 100,
+                "min_count": 0,
+            },
+            hooks=[
+                Hook(
+                    name="detect",
+                    config={},
+                    limits=Limits(memory="512m"),
+                    feature=Feature(cardinality="many", columns=[]),
+                )
+            ],
+            ingester=Ingester(
+                name="ingest",
+                config={"k": "v"},
+                limits=Limits(),
+                schedule=IngesterSchedule(cron="0 0 * * *"),
+                initial_run=None,
+            ),
+            docs=ConventionDocs(purpose="p", example_questions=[], examples=[]),
+        )
+
+    # --- structure / symmetry -------------------------------------------------
+
+    def test_hook_and_ingester_share_component_base(self) -> None:
+        from osa.cli.deploy import Component, Hook, Ingester
+
+        assert issubclass(Hook, Component) and issubclass(Ingester, Component)
+        for f in ("name", "config", "limits", "release"):
+            assert f in Component.model_fields
+        assert "feature" in Hook.model_fields
+        assert {"schedule", "initial_run"} <= set(Ingester.model_fields)
+
+    def test_manifest_has_no_build_or_cloud_fields(self) -> None:
+        from osa.cli.deploy import Component, ConventionManifest
+
+        # Build artifacts live only under `release`; cloud policy never here.
+        for f in ("image", "digest", "source_ref"):
+            assert f not in Component.model_fields
+        for f in ("slug", "runtime_version"):
+            assert f not in ConventionManifest.model_fields
+
+    # --- bind_releases (uniform across hooks + ingester) ----------------------
+
+    def test_bind_sets_release_on_hook_and_ingester(self) -> None:
+        from osa.cli.deploy import ComponentRelease, bind_releases
+
+        m = self._manifest()
+        bound = bind_releases(
+            m,
+            {"detect": ComponentRelease(image="i", digest="d", source_ref="g")},
+            ComponentRelease(image="ii", digest="dd", source_ref="g"),
+        )
+        assert bound.hooks[0].release.image == "i"
+        assert bound.ingester.release.image == "ii"
+        assert bound.ingester.release.source_ref == "g"
+        # bind copies — the input manifest is untouched.
+        assert m.hooks[0].release is None and m.ingester.release is None
+
+    def test_bind_missing_release_stays_none(self) -> None:
+        from osa.cli.deploy import ComponentRelease, bind_releases
+
+        bound = bind_releases(
+            self._manifest(),
+            {"detect": ComponentRelease(image="i", digest="d", source_ref="g")},
+            None,
+        )
+        assert bound.hooks[0].release is not None  # only detect was built
+        assert bound.ingester.release is None
+
+    def test_same_name_hook_and_ingester_do_not_collide(self) -> None:
+        # A hook and the ingester sharing a name must not clobber each other in a
+        # shared keyspace (regression: they used to share one name-keyed map).
+        from osa.cli.deploy import (
+            ComponentRelease,
+            ConventionDocs,
+            ConventionManifest,
+            Feature,
+            Hook,
+            Ingester,
+            SchemaRef,
+            bind_releases,
+        )
+        from osa.types.ingester import Limits
+
+        m = ConventionManifest(
+            title="T",
+            description="d",
+            schema=SchemaRef(id="s", version="1.0.0", fields=[]),
+            file_requirements={"min_count": 0},
+            hooks=[
+                Hook(
+                    name="shared",
+                    config={},
+                    limits=Limits(),
+                    feature=Feature(cardinality="many", columns=[]),
+                )
+            ],
+            ingester=Ingester(name="shared", config={}, limits=Limits()),
+            docs=ConventionDocs(purpose="p", example_questions=[], examples=[]),
+        )
+        bound = bind_releases(
+            m,
+            {"shared": ComponentRelease(image="hook-img", digest="hd", source_ref="g")},
+            ComponentRelease(image="ing-img", digest="id", source_ref="g"),
+        )
+        assert bound.hooks[0].release.image == "hook-img"
+        assert bound.ingester.release.image == "ing-img"
+
+    # --- edge serialization ---------------------------------------------------
+
+    def test_release_less_wire_omits_release_and_has_no_nulls(self) -> None:
+        wire = self._manifest().model_dump(by_alias=True, exclude_none=True)
+        hook = wire["hooks"][0]
+        assert "release" not in hook
+        assert hook["config"] == {} and "limits" in hook and "feature" in hook
+        ing = wire["ingester"]
+        assert "release" not in ing and ing["config"] == {"k": "v"}
+        # ingester is symmetric with hooks: no flat image/digest/runner.
+        assert not ({"image", "digest", "runner"} & set(ing))
+        assert _find_null(wire) is None, f"unexpected null at {_find_null(wire)}"
+
+    def test_bound_wire_nests_release_on_both_symmetrically(self) -> None:
+        from osa.cli.deploy import ComponentRelease, bind_releases
+
+        wire = bind_releases(
+            self._manifest(),
+            {"detect": ComponentRelease(image="i", digest="d", source_ref="g")},
+            ComponentRelease(image="ii", digest="dd", source_ref="g"),
+        ).model_dump(by_alias=True, exclude_none=True)
+        assert wire["hooks"][0]["release"] == {
+            "image": "i",
+            "digest": "d",
+            "source_ref": "g",
+        }
+        assert wire["ingester"]["release"] == {
+            "image": "ii",
+            "digest": "dd",
+            "source_ref": "g",
+        }
+        # config/limits stay on the component, never inside release.
+        assert "config" not in wire["hooks"][0]["release"]
+        assert wire["hooks"][0]["config"] == {}
+        assert wire["ingester"]["config"] == {"k": "v"}
+        assert _find_null(wire) is None
+
+    def test_schema_alias_and_ingester_none(self) -> None:
+        m = self._manifest().model_copy(update={"ingester": None})
+        wire = m.model_dump(by_alias=True, exclude_none=True)
+        assert "schema" in wire and "record_schema" not in wire
+        assert "ingester" not in wire  # None → omitted by exclude_none
+
+    def test_build_manifest_release_free(self) -> None:
+        from osa import Example, Field, Schema
+        from osa._registry import _conventions, clear
+        from osa.authoring.convention import convention
+        from osa.cli.deploy import ConventionManifest, build_manifest
+
+        clear()
+
+        class Cell(Schema):
+            __schema_id__ = "cell-schema"
+
+            organism: str = Field(description="Organism")
+
+        convention(
+            title="Cell Convention",
+            description="x",
+            version="1.0.0",
+            schema=Cell,
+            files={"accepted_types": [".csv"], "max_count": 1, "max_file_size": 1},
+            hooks=[],
+            purpose="Test data.",
+            example_questions=["q1?", "q2?", "q3?"],
+            examples=[Example(question="q1?", query="GET /x", interpretation="x")],
+        )
+
+        manifest = build_manifest(_conventions[0])
+        assert isinstance(manifest, ConventionManifest)
+        assert manifest.title == "Cell Convention"
+        assert manifest.docs.purpose == "Test data."
+        assert isinstance(manifest.record_schema.fields, list)
+        # release-less by construction; clean wire.
+        wire = manifest.model_dump(by_alias=True, exclude_none=True)
+        assert _find_null(wire) is None

@@ -76,6 +76,62 @@ def meta() -> None:
 
 
 @app.command()
+def manifest(
+    ctx: typer.Context,
+    skip_docs_check: Annotated[
+        bool,
+        typer.Option(
+            "--skip-docs-check", help="Skip the mandatory-docs pre-flight gate."
+        ),
+    ] = False,
+) -> None:
+    """Emit each registered convention's release-less deploy body as JSON.
+
+    Discovers conventions via the ``osa.conventions`` entry points, so it must
+    run where the convention package is installed. stdout carries only the JSON
+    (a `{manifest_version, conventions}` object); diagnostics go to stderr.
+    """
+    import importlib
+    import importlib.metadata
+    import json as _json
+
+    from osa._registry import _conventions
+    from osa.cli.deploy import DeployError, _check_docs_gate, build_manifest
+
+    ui = _ui(ctx)
+
+    for ep in importlib.metadata.entry_points(group="osa.conventions"):
+        ep.load()  # ep.load() handles both module- and object-form entry points
+
+    if not _conventions:
+        ui.error(
+            "No conventions registered",
+            hint="Ensure the convention package is installed and exposes an "
+            "`osa.conventions` entry point",
+        )
+        raise typer.Exit(1)
+
+    if not skip_docs_check:
+        try:
+            _check_docs_gate(_conventions)
+        except DeployError as e:
+            ui.error(str(e), cause=e.cause, hint=e.hint)
+            raise typer.Exit(1) from None
+
+    print(
+        _json.dumps(
+            {
+                "manifest_version": 1,
+                "conventions": [
+                    build_manifest(c).model_dump(by_alias=True, exclude_none=True)
+                    for c in _conventions
+                ],
+            }
+        )
+    )
+
+
+@app.command()
 def emit(data: Annotated[str, typer.Argument(help="JSON data to emit.")]) -> None:
     """Write feature data to $OSA_OUT/features.json."""
     emit_command(data)
@@ -170,7 +226,7 @@ def deploy(
     ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
-        importlib.import_module(ep.value)
+        ep.load()  # ep.load() handles both module- and object-form entry points
 
     server_url, server_source = resolve_server_with_source(flag=server)
     resolved_token = token
@@ -384,7 +440,7 @@ def test_cmd(
     ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
-        importlib.import_module(ep.value)
+        ep.load()  # ep.load() handles both module- and object-form entry points
 
     candidates = [c for c in _conventions if c.ingester_info is not None]
 

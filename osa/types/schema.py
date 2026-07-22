@@ -24,6 +24,25 @@ _TYPE_MAP: dict[type, str] = {
 _SCHEMA_ID_RE = re.compile(r"^[a-z][a-z0-9\-]{2,63}$")
 
 
+class FieldDefinition(BaseModel):
+    """A schema field in the server's FieldDefinition format.
+
+    ``description``/``examples``/``constraints`` are ``None`` when absent; the
+    producer omits them via ``model_dump(exclude_none=True)`` at the edge.
+    ``constraints`` stays an open dict: it is a discriminated union keyed by
+    ``type`` whose ``text`` variant carries arbitrary ``json_schema_extra`` — the
+    one genuinely dynamic corner here.
+    """
+
+    name: str
+    type: str
+    required: bool
+    cardinality: str = "exactly_one"
+    description: str | None = None
+    examples: list[str] | None = None
+    constraints: dict[str, Any] | None = None
+
+
 class MetadataSchema(BaseModel):
     """Base class for defining typed metadata schemas.
 
@@ -63,37 +82,18 @@ class MetadataSchema(BaseModel):
         return cls.__schema_id__
 
     @classmethod
-    def to_field_definitions(cls) -> list[dict[str, Any]]:
-        """Convert this schema's fields to server FieldDefinition dicts.
+    def to_field_definitions(cls) -> list[FieldDefinition]:
+        """Convert this schema's fields to server FieldDefinitions.
 
         Maps Python type hints to the server's FieldType format:
             str → text, int → number (integer_only), float → number,
             bool → boolean, date/datetime → date, T | None → required=False.
         """
-        result: list[dict[str, Any]] = []
+        result: list[FieldDefinition] = []
         for name, field_info in cls.model_fields.items():
-            annotation = field_info.annotation
-            required = field_info.is_required()
-
             # Unwrap Optional[T] / T | None
-            inner = _unwrap_optional(annotation)
-
-            # Resolve field type
+            inner = _unwrap_optional(field_info.annotation)
             field_type = _TYPE_MAP.get(inner, "text")
-
-            field_def: dict[str, Any] = {
-                "name": name,
-                "type": field_type,
-                "required": required,
-                "cardinality": "exactly_one",
-            }
-
-            if field_info.description:
-                field_def["description"] = field_info.description
-
-            examples = _field_examples(field_info)
-            if examples:
-                field_def["examples"] = examples
 
             # Build constraints (discriminated union with "type" key)
             constraints: dict[str, Any] | None = None
@@ -112,10 +112,17 @@ class MetadataSchema(BaseModel):
                     if text_extra:
                         constraints = {"type": "text", **text_extra}
 
-            if constraints:
-                field_def["constraints"] = constraints
-
-            result.append(field_def)
+            examples = _field_examples(field_info)
+            result.append(
+                FieldDefinition(
+                    name=name,
+                    type=field_type,
+                    required=field_info.is_required(),
+                    description=field_info.description or None,
+                    examples=examples or None,
+                    constraints=constraints,
+                )
+            )
         return result
 
 
