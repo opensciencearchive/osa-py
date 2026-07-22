@@ -127,13 +127,12 @@ class TestBuildManifest:
         # config/limits/name stay on the ingester).
         wire = bind_releases(
             manifest,
-            {
-                "test-ingester": ComponentRelease(
-                    image="osa-hooks-ingesters/test-ingester:latest",
-                    digest="sha256:abc123",
-                    source_ref="git:x",
-                )
-            },
+            {},
+            ComponentRelease(
+                image="osa-hooks-ingesters/test-ingester:latest",
+                digest="sha256:abc123",
+                source_ref="git:x",
+            ),
         ).model_dump(by_alias=True, exclude_none=True)
         assert wire["ingester"]["release"] == {
             "image": "osa-hooks-ingesters/test-ingester:latest",
@@ -180,7 +179,9 @@ class TestBuildManifest:
         manifest = build_manifest(conv)
         assert manifest.ingester is not None
         # Release-less wire (no releases bound): present, named, no release.
-        wire = bind_releases(manifest, {}).model_dump(by_alias=True, exclude_none=True)
+        wire = bind_releases(manifest, {}, None).model_dump(
+            by_alias=True, exclude_none=True
+        )
         assert wire["ingester"]["name"] == "test-ingester"
         assert "release" not in wire["ingester"]
 
@@ -248,6 +249,7 @@ class TestBuildManifest:
                     source_ref="git:abc1234",
                 )
             },
+            None,
         ).model_dump(by_alias=True, exclude_none=True)
         assert wire["hooks"][0]["release"] == {
             "image": "osa-hooks/detect_pockets:latest",

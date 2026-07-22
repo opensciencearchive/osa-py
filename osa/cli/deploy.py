@@ -510,16 +510,21 @@ def build_manifest(conv: ConventionInfo) -> ConventionManifest:
 
 
 def bind_releases(
-    manifest: ConventionManifest, releases: dict[str, ComponentRelease]
+    manifest: ConventionManifest,
+    hook_releases: dict[str, ComponentRelease],
+    ingester_release: ComponentRelease | None = None,
 ) -> ConventionManifest:
-    """Return a copy of the manifest with each built component's release bound by
-    name — uniform across hooks and the ingester. ``osa deploy`` uses it; ``osa
-    manifest`` skips it (releases stay ``None``, omitted at serialization)."""
+    """Return a copy of the manifest with each built component's release bound.
+
+    Hooks are matched by name; the (single) ingester takes its release directly.
+    Keeping the two separate means a hook and the ingester sharing a name cannot
+    collide in a shared keyspace. ``osa deploy`` uses this; ``osa manifest``
+    skips it (releases stay ``None``, omitted at serialization)."""
     bound = manifest.model_copy(deep=True)
     for hook in bound.hooks:
-        hook.release = releases.get(hook.name)
+        hook.release = hook_releases.get(hook.name)
     if bound.ingester is not None:
-        bound.ingester.release = releases.get(bound.ingester.name)
+        bound.ingester.release = ingester_release
     return bound
 
 
@@ -753,25 +758,26 @@ def deploy(
 
     with ui.phase("Registering conventions", count=len(_conventions)) as reg_phase:
         for conv in _conventions:
-            releases: dict[str, ComponentRelease] = {}
+            hook_releases: dict[str, ComponentRelease] = {}
             for h in conv.hooks:
                 built = hook_images.get(h.__name__)
                 if built is not None:
                     image, digest = built
-                    releases[h.__name__] = ComponentRelease(
+                    hook_releases[h.__name__] = ComponentRelease(
                         image=image, digest=digest, source_ref=source_ref
                     )
+            ingester_release: ComponentRelease | None = None
             if conv.ingester_info is not None:
                 built = ingester_images.get(conv.ingester_info.name)
                 if built is not None:
                     image, digest = built
-                    releases[conv.ingester_info.name] = ComponentRelease(
+                    ingester_release = ComponentRelease(
                         image=image, digest=digest, source_ref=source_ref
                     )
 
-            payload = bind_releases(build_manifest(conv), releases).model_dump(
-                by_alias=True, exclude_none=True
-            )
+            payload = bind_releases(
+                build_manifest(conv), hook_releases, ingester_release
+            ).model_dump(by_alias=True, exclude_none=True)
 
             with reg_phase.task(conv.title) as task:
                 result = _register_convention(conv, payload, server, token)

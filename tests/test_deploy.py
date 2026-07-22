@@ -384,10 +384,8 @@ class TestConventionManifest:
         m = self._manifest()
         bound = bind_releases(
             m,
-            {
-                "detect": ComponentRelease(image="i", digest="d", source_ref="g"),
-                "ingest": ComponentRelease(image="ii", digest="dd", source_ref="g"),
-            },
+            {"detect": ComponentRelease(image="i", digest="d", source_ref="g")},
+            ComponentRelease(image="ii", digest="dd", source_ref="g"),
         )
         assert bound.hooks[0].release.image == "i"
         assert bound.ingester.release.image == "ii"
@@ -401,9 +399,49 @@ class TestConventionManifest:
         bound = bind_releases(
             self._manifest(),
             {"detect": ComponentRelease(image="i", digest="d", source_ref="g")},
+            None,
         )
         assert bound.hooks[0].release is not None  # only detect was built
         assert bound.ingester.release is None
+
+    def test_same_name_hook_and_ingester_do_not_collide(self) -> None:
+        # A hook and the ingester sharing a name must not clobber each other in a
+        # shared keyspace (regression: they used to share one name-keyed map).
+        from osa.cli.deploy import (
+            ComponentRelease,
+            ConventionDocs,
+            ConventionManifest,
+            Feature,
+            Hook,
+            Ingester,
+            SchemaRef,
+            bind_releases,
+        )
+        from osa.types.ingester import Limits
+
+        m = ConventionManifest(
+            title="T",
+            description="d",
+            schema=SchemaRef(id="s", version="1.0.0", fields=[]),
+            file_requirements={"min_count": 0},
+            hooks=[
+                Hook(
+                    name="shared",
+                    config={},
+                    limits=Limits(),
+                    feature=Feature(cardinality="many", columns=[]),
+                )
+            ],
+            ingester=Ingester(name="shared", config={}, limits=Limits()),
+            docs=ConventionDocs(purpose="p", example_questions=[], examples=[]),
+        )
+        bound = bind_releases(
+            m,
+            {"shared": ComponentRelease(image="hook-img", digest="hd", source_ref="g")},
+            ComponentRelease(image="ing-img", digest="id", source_ref="g"),
+        )
+        assert bound.hooks[0].release.image == "hook-img"
+        assert bound.ingester.release.image == "ing-img"
 
     # --- edge serialization ---------------------------------------------------
 
@@ -423,10 +461,8 @@ class TestConventionManifest:
 
         wire = bind_releases(
             self._manifest(),
-            {
-                "detect": ComponentRelease(image="i", digest="d", source_ref="g"),
-                "ingest": ComponentRelease(image="ii", digest="dd", source_ref="g"),
-            },
+            {"detect": ComponentRelease(image="i", digest="d", source_ref="g")},
+            ComponentRelease(image="ii", digest="dd", source_ref="g"),
         ).model_dump(by_alias=True, exclude_none=True)
         assert wire["hooks"][0]["release"] == {
             "image": "i",

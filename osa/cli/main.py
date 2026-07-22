@@ -101,7 +101,7 @@ def manifest(
     ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
-        importlib.import_module(ep.value)
+        ep.load()  # ep.load() handles both module- and object-form entry points
 
     if not _conventions:
         ui.error(
@@ -226,7 +226,7 @@ def deploy(
     ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
-        importlib.import_module(ep.value)
+        ep.load()  # ep.load() handles both module- and object-form entry points
 
     server_url, server_source = resolve_server_with_source(flag=server)
     resolved_token = token
@@ -440,7 +440,7 @@ def test_cmd(
     ui = _ui(ctx)
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
-        importlib.import_module(ep.value)
+        ep.load()  # ep.load() handles both module- and object-form entry points
 
     candidates = [c for c in _conventions if c.ingester_info is not None]
 
