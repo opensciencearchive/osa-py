@@ -12,12 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from osa._registry import ConventionInfo, HookInfo, IngesterInfo, _conventions, _hooks
+from osa.authoring.example import Example
 from osa.cli.proc import run_streamed, tail
 from osa.cli.ui import UI, Task
-from osa.manifest import generate_columns
+from osa.manifest import ColumnDef, generate_columns
+from osa.types.ingester import IngesterSchedule, InitialRun, Limits
+from osa.types.schema import FieldDefinition
 
 
 class DeployError(RuntimeError):
@@ -311,36 +314,15 @@ def _resolve_source_ref(project_dir: Path) -> str:
     return f"git:{sha}"
 
 
-def _hook_to_definition(
-    hook: HookInfo,
-    image: str,
-    digest: str,
-    source_ref: str,
-) -> dict[str, Any]:
-    """Build a HookDefinition dict from a HookInfo + image details."""
-    columns: list[dict[str, Any]] = []
+def _hook_columns(hook: HookInfo) -> list[ColumnDef]:
+    """Feature columns for a hook whose output is a Pydantic model, else []."""
     if (
         hook.output_type is not None
         and isinstance(hook.output_type, type)
         and issubclass(hook.output_type, BaseModel)
     ):
-        columns = [c.model_dump() for c in generate_columns(hook.output_type)]
-
-    return {
-        "name": hook.name,
-        "feature": {
-            "kind": "table",
-            "cardinality": hook.cardinality,
-            "columns": columns,
-        },
-        "release": {
-            "image": image,
-            "digest": digest,
-            "config": {},
-            "limits": hook.limits.model_dump(),
-            "source_ref": source_ref,
-        },
-    }
+        return generate_columns(hook.output_type)
+    return []
 
 
 _MIN_DISTINCT_TRIGGER_QUESTIONS = 3
@@ -383,65 +365,162 @@ def _check_docs_gate(conventions: list[ConventionInfo]) -> None:
             )
 
 
-def _convention_to_payload(
-    conv: ConventionInfo,
-    hook_definitions: list[dict[str, Any]],
-    ingester_image: tuple[str, str] | None = None,
-) -> dict[str, Any]:
-    """Build the CreateConvention request payload."""
-    schema_fields = conv.schema_type.to_field_definitions()
+# --- The convention manifest: one typed model, serialized at the edge -------
+#
+# Authored definition per component (config/limits on the component) + an
+# optional nested build ``release``. ``osa manifest`` emits it release-less;
+# ``osa deploy`` binds releases. Both edges dump with
+# ``model_dump(by_alias=True, exclude_none=True)`` — no custom serializers.
 
+
+class ComponentRelease(BaseModel):
+    """A built component's release artifact: the image + its build anchor."""
+
+    image: str
+    digest: str
+    source_ref: str
+
+
+class Feature(BaseModel):
+    """The feature table a hook emits."""
+
+    kind: str = "table"
+    cardinality: str
+    columns: list[ColumnDef]
+
+
+class FileRequirements(BaseModel):
+    """Upload constraints from the convention's ``files=`` argument."""
+
+    accepted_types: list[str] | None = None
+    max_count: int | None = None
+    max_file_size: int | None = None
+    min_count: int | None = None
+
+
+class SchemaRef(BaseModel):
+    """The record schema a convention indexes."""
+
+    id: str
+    version: str
+    fields: list[FieldDefinition]
+
+
+class ConventionDocs(BaseModel):
+    """Mandatory agent-facing documentation (#151)."""
+
+    purpose: str
+    example_questions: list[str]
+    examples: list[Example]
+    when_not_to_use: str | None = None
+    see_also: list[str] | None = None
+
+
+class Component(BaseModel):
+    """A buildable component: authored ``config``/``limits`` and an optional
+    built ``release`` (``None`` until ``bind_releases`` fills it)."""
+
+    name: str
+    # DYNAMIC: free-form runtime config (hook: {} today; ingester: RuntimeConfig).
+    config: dict[str, Any] | None
+    limits: Limits
+    release: ComponentRelease | None = None
+
+
+class Hook(Component):
+    feature: Feature
+
+
+class Ingester(Component):
+    schedule: IngesterSchedule | None = None
+    initial_run: InitialRun | None = None
+
+
+class ConventionManifest(BaseModel):
+    """A convention's authored definition; ``bind_releases`` binds each
+    component's built release onto it. The single source for both ``osa
+    manifest`` (release-less) and the ``osa deploy`` body — they cannot drift."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str
+    description: str
+    record_schema: SchemaRef = Field(alias="schema")
+    file_requirements: FileRequirements
+    hooks: list[Hook]
+    ingester: Ingester | None
+    docs: ConventionDocs
+
+
+def build_manifest(conv: ConventionInfo) -> ConventionManifest:
+    """Build the typed, release-less manifest for a registered convention."""
     file_reqs = conv.file_requirements
     if "min_count" not in file_reqs:
         file_reqs = {**file_reqs, "min_count": 0}
 
-    ingester: dict[str, Any] | None = None
-    if ingester_image is not None and conv.ingester_info is not None:
-        image, digest = ingester_image
-        config = None
-        ingester_cls = conv.ingester_info.ingester_cls
-        if hasattr(ingester_cls, "RuntimeConfig"):
-            config = ingester_cls.RuntimeConfig().model_dump()  # type: ignore[union-attr]
+    hooks: list[Hook] = []
+    for h in conv.hooks:
+        info = next((hi for hi in _hooks if hi.name == h.__name__), None)
+        if info is None:
+            continue
+        hooks.append(
+            Hook(
+                name=info.name,
+                config={},
+                limits=info.limits,
+                feature=Feature(
+                    cardinality=info.cardinality, columns=_hook_columns(info)
+                ),
+            )
+        )
 
-        schedule = None
-        initial_run = None
-        if conv.ingester_info.schedule is not None:
-            schedule = conv.ingester_info.schedule.model_dump()
-        if conv.ingester_info.initial_run is not None:
-            initial_run = conv.ingester_info.initial_run.model_dump()
+    ingester: Ingester | None = None
+    if conv.ingester_info is not None:
+        info = conv.ingester_info
+        config: dict[str, Any] | None = None
+        if hasattr(info.ingester_cls, "RuntimeConfig"):
+            config = info.ingester_cls.RuntimeConfig().model_dump()  # type: ignore[union-attr]
+        ingester = Ingester(
+            name=info.name,
+            config=config,
+            limits=info.limits,
+            schedule=info.schedule,
+            initial_run=info.initial_run,
+        )
 
-        ingester_limits = conv.ingester_info.limits
-        ingester = {
-            "image": image,
-            "digest": digest,
-            "runner": "oci",
-            "config": config,
-            "limits": ingester_limits.model_dump()
-            if ingester_limits
-            else {"timeout_seconds": 3600, "memory": "512m", "cpu": "0.5"},
-            "schedule": schedule,
-            "initial_run": initial_run,
-        }
+    return ConventionManifest(
+        title=conv.title,
+        description=conv.description,
+        schema=SchemaRef(
+            id=conv.schema_type.schema_id(),
+            version=conv.version,
+            fields=conv.schema_type.to_field_definitions(),
+        ),
+        file_requirements=FileRequirements.model_validate(file_reqs),
+        hooks=hooks,
+        ingester=ingester,
+        docs=ConventionDocs(
+            purpose=conv.purpose,
+            example_questions=conv.example_questions,
+            examples=conv.examples,
+            when_not_to_use=conv.when_not_to_use,
+            see_also=conv.see_also,
+        ),
+    )
 
-    return {
-        "title": conv.title,
-        "description": conv.description,
-        "schema": {
-            "id": conv.schema_type.schema_id(),
-            "version": conv.version,
-            "fields": schema_fields,
-        },
-        "file_requirements": file_reqs,
-        "hooks": hook_definitions,
-        "ingester": ingester,
-        "docs": {
-            "purpose": conv.purpose,
-            "example_questions": conv.example_questions,
-            "examples": [e.model_dump() for e in conv.examples],
-            "when_not_to_use": conv.when_not_to_use,
-            "see_also": conv.see_also,
-        },
-    }
+
+def bind_releases(
+    manifest: ConventionManifest, releases: dict[str, ComponentRelease]
+) -> ConventionManifest:
+    """Return a copy of the manifest with each built component's release bound by
+    name — uniform across hooks and the ingester. ``osa deploy`` uses it; ``osa
+    manifest`` skips it (releases stay ``None``, omitted at serialization)."""
+    bound = manifest.model_copy(deep=True)
+    for hook in bound.hooks:
+        hook.release = releases.get(hook.name)
+    if bound.ingester is not None:
+        bound.ingester.release = releases.get(bound.ingester.name)
+    return bound
 
 
 def _resolve_existing_image(tag: str) -> tuple[str, str]:
@@ -674,24 +753,25 @@ def deploy(
 
     with ui.phase("Registering conventions", count=len(_conventions)) as reg_phase:
         for conv in _conventions:
-            hook_defs = []
+            releases: dict[str, ComponentRelease] = {}
             for h in conv.hooks:
-                name = h.__name__
-                if name in hook_images:
-                    image, digest = hook_images[name]
-                    hook_info = next(hi for hi in _hooks if hi.name == name)
-                    hook_defs.append(
-                        _hook_to_definition(hook_info, image, digest, source_ref)
+                built = hook_images.get(h.__name__)
+                if built is not None:
+                    image, digest = built
+                    releases[h.__name__] = ComponentRelease(
+                        image=image, digest=digest, source_ref=source_ref
+                    )
+            if conv.ingester_info is not None:
+                built = ingester_images.get(conv.ingester_info.name)
+                if built is not None:
+                    image, digest = built
+                    releases[conv.ingester_info.name] = ComponentRelease(
+                        image=image, digest=digest, source_ref=source_ref
                     )
 
-            ingester_img = None
-            if (
-                conv.ingester_info is not None
-                and conv.ingester_info.name in ingester_images
-            ):
-                ingester_img = ingester_images[conv.ingester_info.name]
-
-            payload = _convention_to_payload(conv, hook_defs, ingester_img)
+            payload = bind_releases(build_manifest(conv), releases).model_dump(
+                by_alias=True, exclude_none=True
+            )
 
             with reg_phase.task(conv.title) as task:
                 result = _register_convention(conv, payload, server, token)
