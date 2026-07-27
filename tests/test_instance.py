@@ -33,14 +33,14 @@ def _write_osa_yaml(path: Path, name: str = "test-archive") -> None:
 
 class TestMintDevToken:
     def test_returns_three_part_jwt(self) -> None:
-        token = _mint_dev_token()
+        token = _mint_dev_token("secret")
         parts = token.split(".")
         assert len(parts) == 3
 
     def test_token_has_correct_claims(self) -> None:
         import base64
 
-        token = _mint_dev_token()
+        token = _mint_dev_token("secret")
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
@@ -50,8 +50,8 @@ class TestMintDevToken:
         assert payload["external_id"] == "admin@osa.local"
 
     def test_tokens_have_unique_jti(self) -> None:
-        t1 = _mint_dev_token()
-        t2 = _mint_dev_token()
+        t1 = _mint_dev_token("secret")
+        t2 = _mint_dev_token("secret")
         assert t1 != t2
 
     def test_signs_with_given_secret(self) -> None:
@@ -70,10 +70,13 @@ class TestMintDevToken:
 class TestEffectiveJwtSecret:
     """`osa start` must mint with the secret the local server actually uses."""
 
-    def test_falls_back_to_dev_secret_when_no_env(self, tmp_path: Path) -> None:
-        from osa.cli.instance import DEV_JWT_SECRET, _effective_jwt_secret
+    def test_raises_when_jwt_secret_missing(self, tmp_path: Path) -> None:
+        # No built-in fallback: a missing JWT_SECRET fails loudly rather than
+        # silently minting against a repository-known secret.
+        from osa.cli.instance import _effective_jwt_secret
 
-        assert _effective_jwt_secret(tmp_path) == DEV_JWT_SECRET
+        with pytest.raises(InstanceError, match="JWT_SECRET is not set"):
+            _effective_jwt_secret(tmp_path)
 
     def test_reads_jwt_secret_from_env(self, tmp_path: Path) -> None:
         from osa.cli.instance import _effective_jwt_secret
@@ -193,12 +196,26 @@ class TestInitProject:
         assert "DASHBOARD_PASSWORD=" in env
         assert "SESSION_SECRET=" in env
 
-    def test_env_has_well_known_dev_secrets(self, tmp_path: Path) -> None:
-        project = tmp_path / "archive"
-        init_project(project_dir=project)
-        env = (project / ".env").read_text()
-        assert "POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION" in env
-        assert "JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION" in env
+    def test_env_secrets_are_generated_not_placeholders(self, tmp_path: Path) -> None:
+        from osa.cli.instance import _read_env_file
+
+        init_project(project_dir=tmp_path / "a")
+        init_project(project_dir=tmp_path / "b")
+        a = _read_env_file(tmp_path / "a" / ".env")
+        b = _read_env_file(tmp_path / "b" / ".env")
+
+        for key in (
+            "POSTGRES_PASSWORD",
+            "JWT_SECRET",
+            "SESSION_SECRET",
+            "DASHBOARD_PASSWORD",
+        ):
+            assert "CHANGE" not in a[key]  # not a repository placeholder
+            assert len(a[key]) >= 20  # strong
+            assert a[key] != b[key]  # unique per project
+        # JWT/session secrets satisfy the server's 32-char minimum.
+        assert len(a["JWT_SECRET"]) >= 32
+        assert len(a["SESSION_SECRET"]) >= 32
 
     def test_creates_data_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
@@ -437,14 +454,13 @@ class TestStartInstance:
         idx = args.index("--profile")
         assert args[idx + 1] == "ui"
 
-    def test_with_ui_reports_configured_ports_and_login(self, tmp_path: Path) -> None:
-        # The printed URLs/login must reflect .env overrides, not the defaults.
+    def test_with_ui_reports_configured_ports(self, tmp_path: Path) -> None:
+        # The printed URLs must reflect .env port overrides, not the defaults.
         from unittest.mock import MagicMock
 
         _write_osa_yaml(tmp_path)
         (tmp_path / ".env").write_text(
             "JWT_SECRET=x\nWEB_PORT=9090\nDASHBOARD_PORT=9091\n"
-            "DASHBOARD_USERNAME=root\n"
         )
         ui = MagicMock()
         with _mock_streamed():
@@ -454,7 +470,6 @@ class TestStartInstance:
         printed = " ".join(str(call) for call in ui.info.call_args_list)
         assert "9090" in printed  # WEB_PORT
         assert "9091" in printed  # DASHBOARD_PORT
-        assert "root" in printed  # DASHBOARD_USERNAME
 
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):
@@ -542,6 +557,43 @@ class TestStopInstance:
             with pytest.raises(InstanceError, match="Failed to stop"):
                 stop_instance(project_dir=tmp_path, wipe_data=True)
         assert (tmp_path / ".data").exists()  # a failed down must not delete data
+
+
+class TestDashboard:
+    def test_mint_handoff_token_is_signed_short_lived_proof(self) -> None:
+        import base64
+        import hashlib
+        import hmac
+        import time
+
+        from osa.cli.instance import _mint_handoff_token
+
+        token = _mint_handoff_token("session-secret")
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        message = f"{header_b64}.{payload_b64}".encode()
+        expected = hmac.new(b"session-secret", message, hashlib.sha256).digest()
+        assert base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4)) == expected
+        payload = json.loads(
+            base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
+        )
+        assert payload["purpose"] == "cli-handoff"
+        assert 0 < payload["exp"] - int(time.time()) <= 60
+
+    def test_open_dashboard_opens_handoff_url(self, tmp_path: Path) -> None:
+        from osa.cli.instance import open_dashboard
+
+        (tmp_path / ".env").write_text("SESSION_SECRET=sess\nDASHBOARD_PORT=9091\n")
+        with patch("webbrowser.open", return_value=True) as mock_open:
+            open_dashboard(project_dir=tmp_path)
+        url = mock_open.call_args[0][0]
+        assert url.startswith("http://localhost:9091/api/auth/handoff?t=")
+
+    def test_open_dashboard_requires_session_secret(self, tmp_path: Path) -> None:
+        from osa.cli.instance import open_dashboard
+
+        (tmp_path / ".env").write_text("JWT_SECRET=x\n")  # no SESSION_SECRET
+        with pytest.raises(InstanceError, match="SESSION_SECRET is not set"):
+            open_dashboard(project_dir=tmp_path)
 
 
 class TestInstanceLogs:

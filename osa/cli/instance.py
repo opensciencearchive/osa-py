@@ -134,9 +134,6 @@ def _b64url(data: bytes) -> str:
 
 
 DEV_ADMIN_USER_ID = "00000000-0000-7000-8000-0000000000a1"
-DEV_JWT_SECRET = (
-    "osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION-not-suitable-for-real-use"
-)
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -162,36 +159,59 @@ def _effective_jwt_secret(project_dir: Path) -> str:
 
     The compose template maps ``OSA_AUTH__JWT__SECRET: ${JWT_SECRET}`` (see
     ``templates/docker-compose.yml``), so the container always validates with
-    the project ``.env``'s ``JWT_SECRET`` — a raw ``OSA_AUTH__JWT__SECRET`` in
-    ``.env`` is overridden by that mapping and never reaches the server. We
-    therefore mint against ``JWT_SECRET`` so the token always matches, falling
-    back to the well-known dev secret when it is unset. This is what keeps
-    ``osa start; osa deploy`` working after an operator sets a custom secret —
-    the minter and the server share one source of truth.
+    the project ``.env``'s ``JWT_SECRET``. We mint against that same value so the
+    token always matches — one source of truth. ``osa init`` generates it, so a
+    missing value means an uninitialised or hand-broken project; we fail loudly
+    rather than fall back to any built-in secret.
     """
-    env = _read_env_file(project_dir / ".env")
-    return env.get("JWT_SECRET") or DEV_JWT_SECRET
+    secret = _read_env_file(project_dir / ".env").get("JWT_SECRET")
+    if not secret:
+        raise InstanceError(
+            "JWT_SECRET is not set in .env",
+            hint="Run `osa init` to generate one, or set JWT_SECRET in .env.",
+        )
+    return secret
 
 
-def _mint_dev_token(secret: str = DEV_JWT_SECRET) -> str:
-    header = json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":"))
-    payload = json.dumps(
+def _sign_hs256(payload: dict[str, object], secret: str) -> str:
+    """Sign a compact HS256 JWT — the format the server + dashboard verify."""
+    header_b64 = _b64url(
+        json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode()
+    )
+    payload_b64 = _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    message = f"{header_b64}.{payload_b64}".encode()
+    signature = hmac.new(secret.encode(), message, hashlib.sha256).digest()
+    return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
+
+
+def _mint_dev_token(secret: str) -> str:
+    """Mint a SUPERADMIN token for the seeded local admin, signed with ``secret``."""
+    now = int(time.time())
+    return _sign_hs256(
         {
             "sub": DEV_ADMIN_USER_ID,
             "provider": "local",
             "external_id": "admin@osa.local",
             "aud": "authenticated",
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 86400 * 365,
+            "iat": now,
+            "exp": now + 86400 * 365,
             "jti": secrets.token_hex(16),
         },
-        separators=(",", ":"),
+        secret,
     )
-    header_b64 = _b64url(header.encode())
-    payload_b64 = _b64url(payload.encode())
-    message = f"{header_b64}.{payload_b64}".encode()
-    signature = hmac.new(secret.encode(), message, hashlib.sha256).digest()
-    return f"{header_b64}.{payload_b64}.{_b64url(signature)}"
+
+
+def _mint_handoff_token(session_secret: str) -> str:
+    """Short-lived proof that the caller holds SESSION_SECRET.
+
+    Consumed by the dashboard's ``/api/auth/handoff`` route, which verifies it
+    and sets a fresh session cookie — so ``osa dashboard`` opens the browser
+    already signed in without the password ever leaving ``.env``.
+    """
+    now = int(time.time())
+    return _sign_hs256(
+        {"purpose": "cli-handoff", "iat": now, "exp": now + 60}, session_secret
+    )
 
 
 def _store_dev_credentials(project_dir: Path) -> None:
@@ -213,23 +233,22 @@ _ENV_TEMPLATE = """\
 
 # === Database ===
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION
+POSTGRES_PASSWORD={postgres_password}
 POSTGRES_DB=osa
 
 # === Logging ===
 LOG_LEVEL=INFO
 
 # === Authentication ===
-# OSA_DEV_MODE=true is required for local archives: it lets the server start
-# with the placeholder JWT_SECRET below and mints a SUPERADMIN dev token so
-# `osa deploy` is authenticated out of the box. Set to false and supply a real
-# JWT_SECRET + ORCID credentials for non-local deployments.
+# Secrets below are generated per-project by `osa init` — unique to this
+# machine, never shared. `osa start` signs its dev token with JWT_SECRET, and
+# the server validates with the same value, so the two always match.
 #
-# `osa start` signs its dev token with whatever JWT_SECRET is set here, so you
-# may change this value and local auth keeps working — the minted token and the
-# server stay in sync. (Prod/cloud uses its own secret, configured separately.)
+# OSA_DEV_MODE=true enables the local SUPERADMIN seed so `osa deploy` is
+# authenticated out of the box. Set false + supply ORCID credentials for a
+# non-local deployment.
 OSA_DEV_MODE=true
-JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION-not-suitable-for-real-use
+JWT_SECRET={jwt_secret}
 
 # ORCID credentials (register at https://orcid.org/developer-tools)
 ORCID_CLIENT_ID=
@@ -238,14 +257,24 @@ ORCID_SANDBOX=true
 ORCID_ADMINS=[]
 
 # === Dashboard (management UI, started with `osa start --with-ui`) ===
-# Login credential for the dashboard. It mints its archive token with
-# JWT_SECRET above (shared with the server), and signs its session cookie with
-# SESSION_SECRET below. Change these before exposing the dashboard.
-# Generate secrets with: openssl rand -hex 32
+# The dashboard mints its archive token with JWT_SECRET (shared with the
+# server) and signs its session cookie with SESSION_SECRET. Log in with
+# DASHBOARD_USERNAME/PASSWORD, or just run `osa dashboard` to open it signed in.
 DASHBOARD_USERNAME=admin
-DASHBOARD_PASSWORD=osa-local-dev-dashboard-password-CHANGE-ME
-SESSION_SECRET=osa-local-dev-session-secret-CHANGE-ME-min-32-chars
+DASHBOARD_PASSWORD={dashboard_password}
+SESSION_SECRET={session_secret}
 """
+
+
+def _render_env_template() -> str:
+    """Fill the .env template with freshly generated per-project secrets."""
+    return _ENV_TEMPLATE.format(
+        postgres_password=secrets.token_hex(16),
+        jwt_secret=secrets.token_hex(32),
+        session_secret=secrets.token_hex(32),
+        dashboard_password=secrets.token_urlsafe(18),
+    )
+
 
 _OSA_YAML_TEMPLATE = """\
 name: "{name}"
@@ -279,8 +308,8 @@ def init_project(
     # Write osa.yaml
     (project_dir / "osa.yaml").write_text(_OSA_YAML_TEMPLATE.format(name=resolved_name))
 
-    # Write .env with generated secrets
-    (project_dir / ".env").write_text(_ENV_TEMPLATE)
+    # Write .env with freshly generated per-project secrets.
+    (project_dir / ".env").write_text(_render_env_template())
 
     # Create directories
     (project_dir / ".data").mkdir(exist_ok=True)
@@ -436,16 +465,43 @@ def start_instance(
             )
     ui.success(f"OSA {image_version} running", arrow=LOCAL_SERVER_URL)
     if with_ui:
-        # Report the actual configured ports/login, not the defaults — the
-        # operator may have overridden them in .env (which docker compose reads).
+        # Report the actual configured ports, not the defaults — the operator
+        # may have overridden them in .env (which docker compose reads).
         env = _read_env_file(project_dir / ".env")
         web_port = env.get("WEB_PORT", "8080")
         dashboard_port = env.get("DASHBOARD_PORT", "8081")
-        dashboard_user = env.get("DASHBOARD_USERNAME", "admin")
         ui.info(f"Web UI      http://localhost:{web_port}")
         ui.info(
-            f"Dashboard   http://localhost:{dashboard_port}  (login: {dashboard_user})"
+            f"Dashboard   http://localhost:{dashboard_port}"
+            "  ·  run `osa dashboard` to open it signed in"
         )
+
+
+def open_dashboard(*, project_dir: Path, ui: UI | None = None) -> None:
+    """Open the management dashboard in the browser, already signed in.
+
+    Mints a short-lived handoff proof from the project's SESSION_SECRET and
+    points the browser at the dashboard's ``/api/auth/handoff`` route, which
+    verifies it and sets the session cookie — so no password is typed and the
+    secret never leaves ``.env``.
+    """
+    import webbrowser
+
+    ui = ui or UI.create()
+    env = _read_env_file(project_dir / ".env")
+    session_secret = env.get("SESSION_SECRET")
+    if not session_secret:
+        raise InstanceError(
+            "SESSION_SECRET is not set in .env",
+            hint="Run `osa init` to generate one, or set SESSION_SECRET in .env.",
+        )
+    port = env.get("DASHBOARD_PORT", "8081")
+    proof = _mint_handoff_token(session_secret)
+    url = f"http://localhost:{port}/api/auth/handoff?t={proof}"
+
+    ui.info(f"Opening the dashboard at http://localhost:{port} …")
+    if not webbrowser.open(url):
+        ui.info(f"Could not open a browser. Visit this URL to sign in:\n{url}")
 
 
 def stop_instance(

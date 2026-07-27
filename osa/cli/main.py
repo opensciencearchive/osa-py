@@ -365,6 +365,19 @@ def stop(
 
 
 @app.command()
+def dashboard(ctx: typer.Context) -> None:
+    """Open the management dashboard in your browser, already signed in."""
+    from osa.cli.instance import InstanceError, open_dashboard
+
+    ui = _ui(ctx)
+    try:
+        open_dashboard(project_dir=Path.cwd(), ui=ui)
+    except InstanceError as e:
+        ui.error(str(e), cause=e.cause, hint=e.hint)
+        raise typer.Exit(1) from None
+
+
+@app.command()
 def logs(
     ctx: typer.Context,
     follow: Annotated[
