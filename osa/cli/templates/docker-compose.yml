@@ -85,6 +85,27 @@ services:
       - ui
     restart: unless-stopped
 
+  # Management dashboard. Logs in with the dashboard credential, then mints a
+  # SUPERADMIN token signed with the SHARED JWT_SECRET (same value the server
+  # validates with) to read the archive — so the two must match.
+  dashboard:
+    platform: linux/amd64
+    image: ghcr.io/opensciencearchive/osa-dashboard:${OSA_IMAGE_VERSION}
+    environment:
+      OSA_API_URL: http://server:8000
+      JWT_SECRET: ${JWT_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    ports:
+      - "${DASHBOARD_PORT:-8081}:3000"
+    depends_on:
+      server:
+        condition: service_healthy
+    profiles:
+      - ui
+    restart: unless-stopped
+
 volumes:
   postgres_data:
 

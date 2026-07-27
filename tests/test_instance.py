@@ -125,6 +125,14 @@ class TestEffectiveJwtSecret:
         template = _compose_template_path().read_text()
         assert "OSA_AUTH__JWT__SECRET: ${JWT_SECRET}" in template
 
+    def test_compose_dashboard_shares_jwt_secret(self) -> None:
+        # The dashboard mints its archive token with JWT_SECRET, so it must be
+        # fed the same value the server validates with, and address the server.
+        template = _compose_template_path().read_text()
+        assert "ghcr.io/opensciencearchive/osa-dashboard" in template
+        assert "JWT_SECRET: ${JWT_SECRET}" in template
+        assert "OSA_API_URL: http://server:8000" in template
+
 
 class TestHelpers:
     def test_compose_template_path_exists(self) -> None:
@@ -171,6 +179,14 @@ class TestInitProject:
         env = (project / ".env").read_text()
         assert "POSTGRES_PASSWORD=" in env
         assert "JWT_SECRET=" in env
+
+    def test_env_has_dashboard_credentials(self, tmp_path: Path) -> None:
+        project = tmp_path / "archive"
+        init_project(project_dir=project)
+        env = (project / ".env").read_text()
+        assert "DASHBOARD_USERNAME=" in env
+        assert "DASHBOARD_PASSWORD=" in env
+        assert "SESSION_SECRET=" in env
 
     def test_env_has_well_known_dev_secrets(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"

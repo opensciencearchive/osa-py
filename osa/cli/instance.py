@@ -23,6 +23,8 @@ from osa.cli.ui import UI
 
 GHCR_IMAGE = "opensciencearchive/osa"
 LOCAL_SERVER_URL = "http://127.0.0.1:8000"
+LOCAL_WEB_URL = "http://localhost:8080"
+LOCAL_DASHBOARD_URL = "http://localhost:8081"
 
 
 def _next_page_url(link_header: str | None) -> str | None:
@@ -236,6 +238,15 @@ ORCID_CLIENT_ID=
 ORCID_CLIENT_SECRET=
 ORCID_SANDBOX=true
 ORCID_ADMINS=[]
+
+# === Dashboard (management UI, started with `osa start --with-ui`) ===
+# Login credential for the dashboard. It mints its archive token with
+# JWT_SECRET above (shared with the server), and signs its session cookie with
+# SESSION_SECRET below. Change these before exposing the dashboard.
+# Generate secrets with: openssl rand -hex 32
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=osa-local-dev-dashboard-password-CHANGE-ME
+SESSION_SECRET=osa-local-dev-session-secret-CHANGE-ME-min-32-chars
 """
 
 _OSA_YAML_TEMPLATE = """\
@@ -426,6 +437,9 @@ def start_instance(
                 hint="Run `osa logs server --tail 50` for details",
             )
     ui.success(f"OSA {image_version} running", arrow=LOCAL_SERVER_URL)
+    if with_ui:
+        ui.info(f"Web UI      {LOCAL_WEB_URL}")
+        ui.info(f"Dashboard   {LOCAL_DASHBOARD_URL}  (login: admin)")
 
 
 def stop_instance(
