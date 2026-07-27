@@ -16,7 +16,7 @@ services:
 
   server:
     platform: linux/amd64
-    image: ghcr.io/opensciencearchive/osa:${OSA_IMAGE_VERSION}
+    image: ghcr.io/opensciencearchive/osa:${OSA_IMAGE_VERSION:-latest}
     environment:
       OSA_DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-osa}
       OSA_DATA_DIR: /data
@@ -72,8 +72,10 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # The web app is out of date and excluded from `osa start` for now — it sits
+  # in its own `web` profile (the default `ui` profile is server + dashboard).
   web:
-    image: ghcr.io/opensciencearchive/osa-web:${OSA_IMAGE_VERSION}
+    image: ghcr.io/opensciencearchive/osa-web:${OSA_IMAGE_VERSION:-latest}
     environment:
       API_URL: http://server:8000
     ports:
@@ -82,7 +84,7 @@ services:
       server:
         condition: service_healthy
     profiles:
-      - ui
+      - web
     restart: unless-stopped
 
   # Management dashboard. Logs in with the dashboard credential, then mints a
@@ -90,7 +92,7 @@ services:
   # validates with) to read the archive — so the two must match.
   dashboard:
     platform: linux/amd64
-    image: ghcr.io/opensciencearchive/osa-dashboard:${OSA_IMAGE_VERSION}
+    image: ghcr.io/opensciencearchive/osa-dashboard:${OSA_IMAGE_VERSION:-latest}
     environment:
       OSA_API_URL: http://server:8000
       JWT_SECRET: ${JWT_SECRET}

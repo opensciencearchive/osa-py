@@ -8,6 +8,7 @@ import hmac
 import importlib.resources
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -400,31 +401,56 @@ def _write_dev_override(*, source: Path, project_dir: Path) -> Path:
     # The image's ENTRYPOINT is /app/scripts/entrypoint.sh and its CMD is the
     # uvicorn invocation. We override CMD to add --reload for hot-reload during
     # source-builds; the entrypoint (migrations + dev admin seed) is shared.
-    override = {
-        "services": {
-            "server": {
-                "build": {
-                    "context": str(source_abs),
-                    "dockerfile": "Dockerfile",
-                    "target": "runtime",
-                },
-                "image": None,
-                "command": [
-                    "uvicorn",
-                    "--factory",
-                    "osa.application.api.rest.app:create_app",
-                    "--host",
-                    "0.0.0.0",
-                    "--port",
-                    "8000",
-                    "--reload",
-                ],
-                "environment": {
-                    "OSA_DEV_MODE": "true",
-                },
-            }
+    services: dict[str, object] = {
+        "server": {
+            "build": {
+                "context": str(source_abs),
+                "dockerfile": "Dockerfile",
+                "target": "runtime",
+            },
+            "image": None,
+            "command": [
+                "uvicorn",
+                "--factory",
+                "osa.application.api.rest.app:create_app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000",
+                "--reload",
+            ],
+            "environment": {
+                "OSA_DEV_MODE": "true",
+            },
         }
     }
+
+    # In a monorepo checkout (source is `<root>/server`), build the dashboard
+    # from source too — its sibling — rather than pulling a published tag that
+    # may not exist for this version. Build for the host's native platform so an
+    # arm64 machine doesn't do a slow emulated amd64 build (the template pins
+    # amd64 for pulling the single-arch published image).
+    native = (
+        "linux/arm64"
+        if platform.machine().lower() in ("arm64", "aarch64")
+        else "linux/amd64"
+    )
+    dashboard_src = source_abs.parent / "apps" / "dashboard"
+    if dashboard_src.is_dir():
+        services["dashboard"] = {
+            "build": {
+                "context": str(dashboard_src),
+                "dockerfile": "Dockerfile",
+                "args": {
+                    "NEXT_PUBLIC_IS_PLATFORM": "false",
+                    "NEXT_PUBLIC_API_MODE": "real",
+                },
+            },
+            "image": None,
+            "platform": native,
+        }
+
+    override = {"services": services}
     dest = project_dir / ".osa" / "docker-compose.dev.yml"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(yaml.dump(override, default_flow_style=False, sort_keys=False))
@@ -489,14 +515,12 @@ def start_instance(
             )
     ui.success(f"OSA {image_version} running", arrow=LOCAL_SERVER_URL)
     if with_ui:
-        # Report the actual configured ports, not the defaults — the operator
-        # may have overridden them in .env (which docker compose reads).
-        env = _read_env_file(project_dir / ".env")
-        # `or` (not a get-default) so a present-but-empty value falls back like
-        # docker compose's `${WEB_PORT:-8080}` does, instead of printing a blank.
-        web_port = env.get("WEB_PORT") or "8080"
-        dashboard_port = env.get("DASHBOARD_PORT") or "8081"
-        ui.info(f"Web UI      http://localhost:{web_port}")
+        # Report the actual configured port, not the default — the operator may
+        # have overridden it in .env. `or` (not a get-default) so a present-but-
+        # empty value falls back like docker compose's `${DASHBOARD_PORT:-8081}`.
+        dashboard_port = (
+            _read_env_file(project_dir / ".env").get("DASHBOARD_PORT") or "8081"
+        )
         ui.info(
             f"Dashboard   http://localhost:{dashboard_port}"
             "  ·  run `osa dashboard` to open it signed in"

@@ -424,6 +424,32 @@ class TestWriteDevOverride:
         path = _write_dev_override(source=source, project_dir=tmp_path)
         assert path == tmp_path / ".osa" / "docker-compose.dev.yml"
 
+    def test_builds_dashboard_from_monorepo_sibling(self, tmp_path: Path) -> None:
+        # source is <root>/server; build the sibling apps/dashboard from source
+        # (not pull), but not web (excluded).
+        root = tmp_path / "platform"
+        source = root / "server"
+        source.mkdir(parents=True)
+        (root / "apps" / "dashboard").mkdir(parents=True)
+        (root / "web").mkdir()
+        (tmp_path / ".osa").mkdir()
+        data = yaml.safe_load(
+            _write_dev_override(source=source, project_dir=tmp_path).read_text()
+        )
+        dash = data["services"]["dashboard"]
+        assert dash["build"]["context"] == str((root / "apps" / "dashboard").resolve())
+        assert dash["build"]["args"]["NEXT_PUBLIC_IS_PLATFORM"] == "false"
+        assert "web" not in data["services"]  # web is not built by osa start
+
+    def test_no_dashboard_build_without_sibling(self, tmp_path: Path) -> None:
+        source = tmp_path / "standalone-server"  # no apps/dashboard sibling
+        source.mkdir()
+        (tmp_path / ".osa").mkdir()
+        data = yaml.safe_load(
+            _write_dev_override(source=source, project_dir=tmp_path).read_text()
+        )
+        assert "dashboard" not in data["services"]
+
 
 def _mock_streamed(returncode: int = 0, output: str = ""):
     from osa.cli.proc import ProcResult
@@ -495,22 +521,20 @@ class TestStartInstance:
             start_instance(project_dir=tmp_path, with_ui=False, osa_version="v0.0.0")
         assert "--profile" not in mock_run.call_args[0][0]
 
-    def test_with_ui_reports_configured_ports(self, tmp_path: Path) -> None:
-        # The printed URLs must reflect .env port overrides, not the defaults.
+    def test_with_ui_reports_dashboard_port(self, tmp_path: Path) -> None:
+        # The printed dashboard URL must reflect the .env port override.
         from unittest.mock import MagicMock
 
         _write_osa_yaml(tmp_path)
-        (tmp_path / ".env").write_text(
-            "JWT_SECRET=x\nWEB_PORT=9090\nDASHBOARD_PORT=9091\n"
-        )
+        (tmp_path / ".env").write_text("JWT_SECRET=x\nDASHBOARD_PORT=9091\n")
         ui = MagicMock()
         with _mock_streamed():
             start_instance(
                 project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
             )
         printed = " ".join(str(call) for call in ui.info.call_args_list)
-        assert "9090" in printed  # WEB_PORT
         assert "9091" in printed  # DASHBOARD_PORT
+        assert "Web UI" not in printed  # web is excluded from `osa start`
 
     def test_with_ui_empty_port_falls_back_like_compose(self, tmp_path: Path) -> None:
         # A present-but-empty port must fall back to the default (as compose's
@@ -518,14 +542,13 @@ class TestStartInstance:
         from unittest.mock import MagicMock
 
         _write_osa_yaml(tmp_path)
-        (tmp_path / ".env").write_text("JWT_SECRET=x\nWEB_PORT=\nDASHBOARD_PORT=\n")
+        (tmp_path / ".env").write_text("JWT_SECRET=x\nDASHBOARD_PORT=\n")
         ui = MagicMock()
         with _mock_streamed():
             start_instance(
                 project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
             )
         printed = " ".join(str(call) for call in ui.info.call_args_list)
-        assert "localhost:8080" in printed
         assert "localhost:8081" in printed
 
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
