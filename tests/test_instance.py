@@ -217,6 +217,23 @@ class TestInitProject:
         assert len(a["JWT_SECRET"]) >= 32
         assert len(a["SESSION_SECRET"]) >= 32
 
+    def test_env_is_owner_readable_only(self, tmp_path: Path) -> None:
+        import stat
+
+        project = tmp_path / "archive"
+        init_project(project_dir=project)
+        mode = stat.S_IMODE((project / ".env").stat().st_mode)
+        assert mode == 0o600  # secrets not readable by other local users
+
+    def test_force_tightens_existing_env_perms(self, tmp_path: Path) -> None:
+        import stat
+
+        project = tmp_path / "archive"
+        init_project(project_dir=project)
+        (project / ".env").chmod(0o644)  # simulate a pre-existing loose file
+        init_project(project_dir=project, force=True)
+        assert stat.S_IMODE((project / ".env").stat().st_mode) == 0o600
+
     def test_creates_data_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
         init_project(project_dir=project)

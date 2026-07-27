@@ -291,6 +291,21 @@ auth:
 _GITIGNORE_LINES = [".data/", ".env", ".osa/"]
 
 
+def _write_private_file(path: Path, content: str) -> None:
+    """Write a secrets file readable only by the owner (mode 0600).
+
+    Created restricted up front (``os.open`` with 0600) so the generated
+    secrets are never briefly world-readable, and re-``chmod``-ed to cover an
+    existing looser file on ``--force`` (O_CREAT doesn't tighten existing modes).
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode())
+    finally:
+        os.close(fd)
+    path.chmod(0o600)
+
+
 def init_project(
     *,
     project_dir: Path,
@@ -308,8 +323,9 @@ def init_project(
     # Write osa.yaml
     (project_dir / "osa.yaml").write_text(_OSA_YAML_TEMPLATE.format(name=resolved_name))
 
-    # Write .env with freshly generated per-project secrets.
-    (project_dir / ".env").write_text(_render_env_template())
+    # Write .env with freshly generated per-project secrets, owner-only (0600)
+    # so other local users can't read them.
+    _write_private_file(project_dir / ".env", _render_env_template())
 
     # Create directories
     (project_dir / ".data").mkdir(exist_ok=True)
