@@ -412,7 +412,7 @@ def start_instance(
     project_dir: Path,
     detach: bool = True,
     source: Path | None = None,
-    with_ui: bool = False,
+    with_ui: bool = True,
     osa_version: str | None = None,
     ui: UI | None = None,
 ) -> None:

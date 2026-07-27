@@ -445,14 +445,21 @@ class TestStartInstance:
         args = mock_run.call_args[0][0]
         assert "--build" in args
 
-    def test_with_ui_adds_profile(self, tmp_path: Path) -> None:
+    def test_ui_profile_is_on_by_default(self, tmp_path: Path) -> None:
+        # `osa start` brings up the web UI + dashboard by default.
         _write_osa_yaml(tmp_path)
         with _mock_streamed() as mock_run:
-            start_instance(project_dir=tmp_path, with_ui=True, osa_version="v0.0.0")
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "--profile" in args
-        idx = args.index("--profile")
-        assert args[idx + 1] == "ui"
+        assert args[args.index("--profile") + 1] == "ui"
+
+    def test_no_ui_omits_profile(self, tmp_path: Path) -> None:
+        # `osa start --no-ui` (with_ui=False) starts only the API.
+        _write_osa_yaml(tmp_path)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, with_ui=False, osa_version="v0.0.0")
+        assert "--profile" not in mock_run.call_args[0][0]
 
     def test_with_ui_reports_configured_ports(self, tmp_path: Path) -> None:
         # The printed URLs must reflect .env port overrides, not the defaults.

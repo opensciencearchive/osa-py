@@ -314,16 +314,18 @@ def start(
         Optional[Path],
         typer.Option("--source", help="Path to OSA server source for dev mode."),
     ] = None,
-    with_ui: Annotated[
+    no_ui: Annotated[
         bool,
-        typer.Option("--with-ui", help="Start the web UI."),
+        typer.Option(
+            "--no-ui", help="Start only the API, without the web UI + dashboard."
+        ),
     ] = False,
     osa_version: Annotated[
         Optional[str],
         typer.Option("--osa-version", help="OSA server image version tag."),
     ] = None,
 ) -> None:
-    """Start the local OSA instance."""
+    """Start the local OSA instance (API + web UI + dashboard)."""
     from osa.cli.instance import InstanceError, start_instance
 
     ui = _ui(ctx)
@@ -332,7 +334,7 @@ def start(
             project_dir=Path.cwd(),
             detach=detach,
             source=source.resolve() if source else None,
-            with_ui=with_ui,
+            with_ui=not no_ui,
             osa_version=osa_version,
             ui=ui,
         )
