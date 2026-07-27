@@ -225,7 +225,10 @@ class TestInitProject:
         mode = stat.S_IMODE((project / ".env").stat().st_mode)
         assert mode == 0o600  # secrets not readable by other local users
 
-    def test_force_tightens_existing_env_perms(self, tmp_path: Path) -> None:
+    def test_force_replaces_env_at_0600_no_temp_leftover(self, tmp_path: Path) -> None:
+        # --force must not briefly expose secrets: the new .env is written to a
+        # 0600 temp and atomically renamed, so it ends up 0600 even over a 0644
+        # file, and no temp file is left behind.
         import stat
 
         project = tmp_path / "archive"
@@ -233,6 +236,7 @@ class TestInitProject:
         (project / ".env").chmod(0o644)  # simulate a pre-existing loose file
         init_project(project_dir=project, force=True)
         assert stat.S_IMODE((project / ".env").stat().st_mode) == 0o600
+        assert not list(project.glob(".env.*.tmp"))  # temp renamed away
 
     def test_creates_data_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"

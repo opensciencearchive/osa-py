@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -292,18 +293,25 @@ _GITIGNORE_LINES = [".data/", ".env", ".osa/"]
 
 
 def _write_private_file(path: Path, content: str) -> None:
-    """Write a secrets file readable only by the owner (mode 0600).
+    """Write a secrets file readable only by the owner (mode 0600), atomically.
 
-    Created restricted up front (``os.open`` with 0600) so the generated
-    secrets are never briefly world-readable, and re-``chmod``-ed to cover an
-    existing looser file on ``--force`` (O_CREAT doesn't tighten existing modes).
+    The content is written to a 0600 temp file (``mkstemp``) in the same
+    directory, then ``os.replace``-d over ``path``. So the secrets are never
+    present in a world-readable file — not even during a ``--force`` overwrite
+    of a pre-existing 0644 ``.env`` (which O_TRUNC-then-chmod would briefly
+    expose).
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
     try:
-        os.write(fd, content.encode())
-    finally:
-        os.close(fd)
-    path.chmod(0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def init_project(
