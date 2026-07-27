@@ -133,6 +133,11 @@ class TestEffectiveJwtSecret:
         assert "JWT_SECRET: ${JWT_SECRET}" in template
         assert "OSA_API_URL: http://server:8000" in template
 
+    def test_compose_dashboard_binds_loopback(self) -> None:
+        # Default dashboard credentials must not be reachable from the network.
+        template = _compose_template_path().read_text()
+        assert "127.0.0.1:${DASHBOARD_PORT:-8081}:3000" in template
+
 
 class TestHelpers:
     def test_compose_template_path_exists(self) -> None:
@@ -431,6 +436,25 @@ class TestStartInstance:
         assert "--profile" in args
         idx = args.index("--profile")
         assert args[idx + 1] == "ui"
+
+    def test_with_ui_reports_configured_ports_and_login(self, tmp_path: Path) -> None:
+        # The printed URLs/login must reflect .env overrides, not the defaults.
+        from unittest.mock import MagicMock
+
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".env").write_text(
+            "JWT_SECRET=x\nWEB_PORT=9090\nDASHBOARD_PORT=9091\n"
+            "DASHBOARD_USERNAME=root\n"
+        )
+        ui = MagicMock()
+        with _mock_streamed():
+            start_instance(
+                project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
+            )
+        printed = " ".join(str(call) for call in ui.info.call_args_list)
+        assert "9090" in printed  # WEB_PORT
+        assert "9091" in printed  # DASHBOARD_PORT
+        assert "root" in printed  # DASHBOARD_USERNAME
 
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):

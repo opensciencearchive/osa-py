@@ -98,7 +98,10 @@ services:
       DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
     ports:
-      - "${DASHBOARD_PORT:-8081}:3000"
+      # Bound to loopback: this is a local dev stack with default dashboard
+      # credentials, so it must not be reachable from the network. Publish it
+      # explicitly (edit this line) if you need LAN/remote access.
+      - "127.0.0.1:${DASHBOARD_PORT:-8081}:3000"
     depends_on:
       server:
         condition: service_healthy

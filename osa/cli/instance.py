@@ -23,8 +23,6 @@ from osa.cli.ui import UI
 
 GHCR_IMAGE = "opensciencearchive/osa"
 LOCAL_SERVER_URL = "http://127.0.0.1:8000"
-LOCAL_WEB_URL = "http://localhost:8080"
-LOCAL_DASHBOARD_URL = "http://localhost:8081"
 
 
 def _next_page_url(link_header: str | None) -> str | None:
@@ -438,8 +436,16 @@ def start_instance(
             )
     ui.success(f"OSA {image_version} running", arrow=LOCAL_SERVER_URL)
     if with_ui:
-        ui.info(f"Web UI      {LOCAL_WEB_URL}")
-        ui.info(f"Dashboard   {LOCAL_DASHBOARD_URL}  (login: admin)")
+        # Report the actual configured ports/login, not the defaults — the
+        # operator may have overridden them in .env (which docker compose reads).
+        env = _read_env_file(project_dir / ".env")
+        web_port = env.get("WEB_PORT", "8080")
+        dashboard_port = env.get("DASHBOARD_PORT", "8081")
+        dashboard_user = env.get("DASHBOARD_USERNAME", "admin")
+        ui.info(f"Web UI      http://localhost:{web_port}")
+        ui.info(
+            f"Dashboard   http://localhost:{dashboard_port}  (login: {dashboard_user})"
+        )
 
 
 def stop_instance(
