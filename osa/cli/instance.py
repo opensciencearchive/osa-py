@@ -472,6 +472,12 @@ def stop_instance(
                 "container-owned), then re-run `osa stop --wipe-data`.",
             ) from e
 
+        # Files are gone; drop the DB volume. Removing a host bind mount and a
+        # Docker volume can't be made atomic, so we run the likely-to-fail step
+        # (./.data removal, above) FIRST — its failure aborts before anything is
+        # destroyed. This drop rarely fails (the containers are already down); if
+        # it does, the wipe is merely incomplete (files gone, volume left) and
+        # re-running `osa stop --wipe-data` finishes it idempotently.
         wiped = run_streamed([*cmd, "down", "--volumes"], task=task, cwd=project_dir)
         if wiped.returncode != 0:
             raise InstanceError(
