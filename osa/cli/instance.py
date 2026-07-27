@@ -468,8 +468,10 @@ def start_instance(
         # Report the actual configured ports, not the defaults — the operator
         # may have overridden them in .env (which docker compose reads).
         env = _read_env_file(project_dir / ".env")
-        web_port = env.get("WEB_PORT", "8080")
-        dashboard_port = env.get("DASHBOARD_PORT", "8081")
+        # `or` (not a get-default) so a present-but-empty value falls back like
+        # docker compose's `${WEB_PORT:-8080}` does, instead of printing a blank.
+        web_port = env.get("WEB_PORT") or "8080"
+        dashboard_port = env.get("DASHBOARD_PORT") or "8081"
         ui.info(f"Web UI      http://localhost:{web_port}")
         ui.info(
             f"Dashboard   http://localhost:{dashboard_port}"
@@ -495,7 +497,7 @@ def open_dashboard(*, project_dir: Path, ui: UI | None = None) -> None:
             "SESSION_SECRET is not set in .env",
             hint="Run `osa init` to generate one, or set SESSION_SECRET in .env.",
         )
-    port = env.get("DASHBOARD_PORT", "8081")
+    port = env.get("DASHBOARD_PORT") or "8081"
     proof = _mint_handoff_token(session_secret)
     url = f"http://localhost:{port}/api/auth/handoff?t={proof}"
 

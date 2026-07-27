@@ -471,6 +471,22 @@ class TestStartInstance:
         assert "9090" in printed  # WEB_PORT
         assert "9091" in printed  # DASHBOARD_PORT
 
+    def test_with_ui_empty_port_falls_back_like_compose(self, tmp_path: Path) -> None:
+        # A present-but-empty port must fall back to the default (as compose's
+        # `:-` does), not print a blank port.
+        from unittest.mock import MagicMock
+
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".env").write_text("JWT_SECRET=x\nWEB_PORT=\nDASHBOARD_PORT=\n")
+        ui = MagicMock()
+        with _mock_streamed():
+            start_instance(
+                project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
+            )
+        printed = " ".join(str(call) for call in ui.info.call_args_list)
+        assert "localhost:8080" in printed
+        assert "localhost:8081" in printed
+
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):
             start_instance(project_dir=tmp_path, osa_version="v0.0.0")
