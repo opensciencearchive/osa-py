@@ -434,33 +434,52 @@ def stop_instance(
     ui = ui or UI.create()
     project_name = _read_project_name(project_dir)
     cmd = _build_compose_command(project_dir=project_dir, project_name=project_name)
-    # `down` alone keeps named volumes (the DB persists across stop/start).
-    # `--volumes` additionally removes them — here, the postgres_data DB volume.
-    down = [*cmd, "down", "--volumes"] if wipe_data else [*cmd, "down"]
-    label = "Stopping services and wiping data" if wipe_data else "Stopping services"
-    with ui.task(label) as task:
-        proc = run_streamed(down, task=task, cwd=project_dir)
-        if proc.returncode != 0:
+
+    if not wipe_data:
+        with ui.task("Stopping services") as task:
+            proc = run_streamed([*cmd, "down"], task=task, cwd=project_dir)
+            if proc.returncode != 0:
+                raise InstanceError(
+                    "Failed to stop OSA instance",
+                    cause=tail(proc.output, 30),
+                )
+        return
+
+    # --wipe-data destroys the DB volume AND the deposited-files bind mount
+    # (./.data). Order matters: destroy nothing until we can destroy everything.
+    # We stop the containers keeping the volumes, remove ./.data first — if that
+    # fails (e.g. container-owned files on Linux) we abort with the DB volume
+    # still intact rather than leaving a half-wiped instance — then drop volumes.
+    data_dir = project_dir / ".data"
+    with ui.task("Stopping services and wiping data") as task:
+        stopped = run_streamed([*cmd, "down"], task=task, cwd=project_dir)
+        if stopped.returncode != 0:
             raise InstanceError(
                 "Failed to stop OSA instance",
-                cause=tail(proc.output, 30),
+                cause=tail(stopped.output, 30),
             )
-        if wipe_data:
-            # Deposited files + hook artifacts live in a host bind mount (./.data),
-            # which `down --volumes` does not touch — remove it too so --wipe-data
-            # clears ALL local state, not just the DB volume.
-            data_dir = project_dir / ".data"
-            try:
-                shutil.rmtree(data_dir)
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                raise InstanceError(
-                    f"Stopped OSA, but could not remove {data_dir}",
-                    cause=str(e),
-                    hint="Remove it manually — some files may be owned by the container.",
-                ) from e
-            task.detail("data wiped")
+
+        try:
+            shutil.rmtree(data_dir)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            raise InstanceError(
+                f"Stopped OSA, but could not remove {data_dir}. The database "
+                "volume was left intact, so nothing was partially wiped.",
+                cause=str(e),
+                hint="Remove it with elevated permissions (some files may be "
+                "container-owned), then re-run `osa stop --wipe-data`.",
+            ) from e
+
+        wiped = run_streamed([*cmd, "down", "--volumes"], task=task, cwd=project_dir)
+        if wiped.returncode != 0:
+            raise InstanceError(
+                "Removed deposited files but failed to drop the database volume",
+                cause=tail(wiped.output, 30),
+                hint="Re-run `osa stop --wipe-data` to drop the remaining volume.",
+            )
+        task.detail("data wiped")
 
 
 def instance_logs(

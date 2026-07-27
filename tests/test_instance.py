@@ -503,6 +503,22 @@ class TestStopInstance:
                 stop_instance(project_dir=tmp_path, wipe_data=True)
         assert (tmp_path / ".data").exists()  # a failed down must not delete data
 
+    def test_wipe_failure_leaves_db_volume_intact(self, tmp_path: Path) -> None:
+        # The DB volume must be dropped only AFTER ./.data is removed. If the
+        # removal fails (e.g. container-owned files), we must not have already
+        # run `down --volumes` — otherwise the wipe is left half-done.
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        with _mock_streamed() as mock_run:
+            with patch(
+                "osa.cli.instance.shutil.rmtree",
+                side_effect=OSError("permission denied"),
+            ):
+                with pytest.raises(InstanceError, match="could not remove"):
+                    stop_instance(project_dir=tmp_path, wipe_data=True)
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        assert not any("--volumes" in cmd for cmd in calls)
+
 
 class TestInstanceLogs:
     def test_calls_docker_compose_logs(self, tmp_path: Path) -> None:
