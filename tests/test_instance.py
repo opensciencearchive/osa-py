@@ -466,6 +466,19 @@ class TestStartInstance:
         args = mock_run.call_args[0][0]
         assert "--build" in args
 
+    def test_source_still_includes_ui(self, tmp_path: Path) -> None:
+        # `--source` builds the server from source but must still bring up the
+        # UI profile (web + dashboard) — it's independent of the source build.
+        _write_osa_yaml(tmp_path)
+        source = tmp_path / "server-src"
+        source.mkdir()
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, source=source, osa_version="v0.0.0")
+        args = mock_run.call_args[0][0]
+        assert "--build" in args
+        assert "--profile" in args
+        assert args[args.index("--profile") + 1] == "ui"
+
     def test_ui_profile_is_on_by_default(self, tmp_path: Path) -> None:
         # `osa start` brings up the web UI + dashboard by default.
         _write_osa_yaml(tmp_path)
