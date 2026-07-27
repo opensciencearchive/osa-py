@@ -471,6 +471,38 @@ class TestStopInstance:
             with pytest.raises(InstanceError, match="Failed to stop"):
                 stop_instance(project_dir=tmp_path)
 
+    def test_default_keeps_volumes_and_data(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        with _mock_streamed() as mock_run:
+            stop_instance(project_dir=tmp_path)
+        down = mock_run.call_args[0][0]
+        assert "--volumes" not in down  # DB volume kept
+        assert (tmp_path / ".data").exists()  # deposited data kept
+
+    def test_wipe_data_removes_volumes_and_data(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        (tmp_path / ".data" / "deposited.txt").write_text("x")
+        with _mock_streamed() as mock_run:
+            stop_instance(project_dir=tmp_path, wipe_data=True)
+        down = mock_run.call_args[0][0]
+        assert "--volumes" in down  # DB volume dropped
+        assert not (tmp_path / ".data").exists()  # bind-mount data wiped too
+
+    def test_wipe_data_tolerates_missing_data_dir(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)  # no .data dir created
+        with _mock_streamed():
+            stop_instance(project_dir=tmp_path, wipe_data=True)  # must not raise
+
+    def test_failed_wipe_stop_preserves_data(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        with _mock_streamed(returncode=1):
+            with pytest.raises(InstanceError, match="Failed to stop"):
+                stop_instance(project_dir=tmp_path, wipe_data=True)
+        assert (tmp_path / ".data").exists()  # a failed down must not delete data
+
 
 class TestInstanceLogs:
     def test_calls_docker_compose_logs(self, tmp_path: Path) -> None:

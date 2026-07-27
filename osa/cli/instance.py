@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -427,17 +428,39 @@ def start_instance(
     ui.success(f"OSA {image_version} running", arrow=LOCAL_SERVER_URL)
 
 
-def stop_instance(*, project_dir: Path, ui: UI | None = None) -> None:
+def stop_instance(
+    *, project_dir: Path, wipe_data: bool = False, ui: UI | None = None
+) -> None:
     ui = ui or UI.create()
     project_name = _read_project_name(project_dir)
     cmd = _build_compose_command(project_dir=project_dir, project_name=project_name)
-    with ui.task("Stopping services") as task:
-        proc = run_streamed([*cmd, "down"], task=task, cwd=project_dir)
+    # `down` alone keeps named volumes (the DB persists across stop/start).
+    # `--volumes` additionally removes them — here, the postgres_data DB volume.
+    down = [*cmd, "down", "--volumes"] if wipe_data else [*cmd, "down"]
+    label = "Stopping services and wiping data" if wipe_data else "Stopping services"
+    with ui.task(label) as task:
+        proc = run_streamed(down, task=task, cwd=project_dir)
         if proc.returncode != 0:
             raise InstanceError(
                 "Failed to stop OSA instance",
                 cause=tail(proc.output, 30),
             )
+        if wipe_data:
+            # Deposited files + hook artifacts live in a host bind mount (./.data),
+            # which `down --volumes` does not touch — remove it too so --wipe-data
+            # clears ALL local state, not just the DB volume.
+            data_dir = project_dir / ".data"
+            try:
+                shutil.rmtree(data_dir)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                raise InstanceError(
+                    f"Stopped OSA, but could not remove {data_dir}",
+                    cause=str(e),
+                    hint="Remove it manually — some files may be owned by the container.",
+                ) from e
+            task.detail("data wiped")
 
 
 def instance_logs(
