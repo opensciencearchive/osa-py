@@ -342,13 +342,23 @@ def start(
 
 
 @app.command()
-def stop(ctx: typer.Context) -> None:
+def stop(
+    ctx: typer.Context,
+    wipe_data: Annotated[
+        bool,
+        typer.Option(
+            "--wipe-data",
+            help="Also delete all local data: the Postgres volume and deposited "
+            "files (.data). Destructive and irreversible.",
+        ),
+    ] = False,
+) -> None:
     """Stop the local OSA instance."""
     from osa.cli.instance import InstanceError, stop_instance
 
     ui = _ui(ctx)
     try:
-        stop_instance(project_dir=Path.cwd(), ui=ui)
+        stop_instance(project_dir=Path.cwd(), wipe_data=wipe_data, ui=ui)
     except InstanceError as e:
         ui.error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None

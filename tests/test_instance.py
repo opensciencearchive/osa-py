@@ -471,6 +471,76 @@ class TestStopInstance:
             with pytest.raises(InstanceError, match="Failed to stop"):
                 stop_instance(project_dir=tmp_path)
 
+    def test_default_keeps_volumes_and_data(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        with _mock_streamed() as mock_run:
+            stop_instance(project_dir=tmp_path)
+        down = mock_run.call_args[0][0]
+        assert "--volumes" not in down  # DB volume kept
+        assert (tmp_path / ".data").exists()  # deposited data kept
+
+    def test_wipe_data_removes_volumes_and_data(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        (tmp_path / ".data" / "deposited.txt").write_text("x")
+        with _mock_streamed() as mock_run:
+            stop_instance(project_dir=tmp_path, wipe_data=True)
+        down = mock_run.call_args[0][0]
+        assert "--volumes" in down  # DB volume dropped
+        assert not (tmp_path / ".data").exists()  # bind-mount data wiped too
+
+    def test_wipe_data_tolerates_missing_data_dir(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)  # no .data dir created
+        with _mock_streamed():
+            stop_instance(project_dir=tmp_path, wipe_data=True)  # must not raise
+
+    def test_failed_wipe_stop_preserves_data(self, tmp_path: Path) -> None:
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        with _mock_streamed(returncode=1):
+            with pytest.raises(InstanceError, match="Failed to stop"):
+                stop_instance(project_dir=tmp_path, wipe_data=True)
+        assert (tmp_path / ".data").exists()  # a failed down must not delete data
+
+    def test_wipe_failure_leaves_db_volume_intact(self, tmp_path: Path) -> None:
+        # The DB volume must be dropped only AFTER ./.data is removed. If the
+        # removal fails (e.g. container-owned files), we must not have already
+        # run `down --volumes` — otherwise the wipe is left half-done.
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+        with _mock_streamed() as mock_run:
+            with patch(
+                "osa.cli.instance.shutil.rmtree",
+                side_effect=OSError("permission denied"),
+            ):
+                with pytest.raises(InstanceError, match="could not remove"):
+                    stop_instance(project_dir=tmp_path, wipe_data=True)
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        assert not any("--volumes" in cmd for cmd in calls)
+
+    def test_wipe_volume_drop_failure_is_recoverable(self, tmp_path: Path) -> None:
+        # If the volume drop fails after ./.data is removed, we raise a clear
+        # error; the files are gone but re-running (with .data already missing)
+        # completes the wipe idempotently.
+        from osa.cli.proc import ProcResult
+
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".data").mkdir()
+
+        def only_volume_drop_fails(args: list[str], **_: object) -> ProcResult:
+            code = 1 if "--volumes" in args else 0
+            return ProcResult(returncode=code, output="boom")
+
+        with patch("osa.cli.instance.run_streamed", side_effect=only_volume_drop_fails):
+            with pytest.raises(InstanceError, match="drop the database volume"):
+                stop_instance(project_dir=tmp_path, wipe_data=True)
+        assert not (tmp_path / ".data").exists()  # files were removed
+
+        # Retry: .data already gone (tolerated), volume drop now succeeds.
+        with _mock_streamed():
+            stop_instance(project_dir=tmp_path, wipe_data=True)  # must not raise
+
 
 class TestInstanceLogs:
     def test_calls_docker_compose_logs(self, tmp_path: Path) -> None:
