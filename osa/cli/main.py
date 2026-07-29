@@ -314,16 +314,18 @@ def start(
         Optional[Path],
         typer.Option("--source", help="Path to OSA server source for dev mode."),
     ] = None,
-    with_ui: Annotated[
+    no_ui: Annotated[
         bool,
-        typer.Option("--with-ui", help="Start the web UI."),
+        typer.Option(
+            "--no-ui", help="Start only the API, without the web UI + dashboard."
+        ),
     ] = False,
     osa_version: Annotated[
         Optional[str],
         typer.Option("--osa-version", help="OSA server image version tag."),
     ] = None,
 ) -> None:
-    """Start the local OSA instance."""
+    """Start the local OSA instance (API + web UI + dashboard)."""
     from osa.cli.instance import InstanceError, start_instance
 
     ui = _ui(ctx)
@@ -332,7 +334,7 @@ def start(
             project_dir=Path.cwd(),
             detach=detach,
             source=source.resolve() if source else None,
-            with_ui=with_ui,
+            with_ui=not no_ui,
             osa_version=osa_version,
             ui=ui,
         )
@@ -359,6 +361,19 @@ def stop(
     ui = _ui(ctx)
     try:
         stop_instance(project_dir=Path.cwd(), wipe_data=wipe_data, ui=ui)
+    except InstanceError as e:
+        ui.error(str(e), cause=e.cause, hint=e.hint)
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def dashboard(ctx: typer.Context) -> None:
+    """Open the management dashboard in your browser, already signed in."""
+    from osa.cli.instance import InstanceError, open_dashboard
+
+    ui = _ui(ctx)
+    try:
+        open_dashboard(project_dir=Path.cwd(), ui=ui)
     except InstanceError as e:
         ui.error(str(e), cause=e.cause, hint=e.hint)
         raise typer.Exit(1) from None

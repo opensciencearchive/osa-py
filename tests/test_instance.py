@@ -33,14 +33,14 @@ def _write_osa_yaml(path: Path, name: str = "test-archive") -> None:
 
 class TestMintDevToken:
     def test_returns_three_part_jwt(self) -> None:
-        token = _mint_dev_token()
+        token = _mint_dev_token("secret")
         parts = token.split(".")
         assert len(parts) == 3
 
     def test_token_has_correct_claims(self) -> None:
         import base64
 
-        token = _mint_dev_token()
+        token = _mint_dev_token("secret")
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (4 - len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
@@ -50,8 +50,8 @@ class TestMintDevToken:
         assert payload["external_id"] == "admin@osa.local"
 
     def test_tokens_have_unique_jti(self) -> None:
-        t1 = _mint_dev_token()
-        t2 = _mint_dev_token()
+        t1 = _mint_dev_token("secret")
+        t2 = _mint_dev_token("secret")
         assert t1 != t2
 
     def test_signs_with_given_secret(self) -> None:
@@ -70,10 +70,13 @@ class TestMintDevToken:
 class TestEffectiveJwtSecret:
     """`osa start` must mint with the secret the local server actually uses."""
 
-    def test_falls_back_to_dev_secret_when_no_env(self, tmp_path: Path) -> None:
-        from osa.cli.instance import DEV_JWT_SECRET, _effective_jwt_secret
+    def test_raises_when_jwt_secret_missing(self, tmp_path: Path) -> None:
+        # No built-in fallback: a missing JWT_SECRET fails loudly rather than
+        # silently minting against a repository-known secret.
+        from osa.cli.instance import _effective_jwt_secret
 
-        assert _effective_jwt_secret(tmp_path) == DEV_JWT_SECRET
+        with pytest.raises(InstanceError, match="JWT_SECRET is not set"):
+            _effective_jwt_secret(tmp_path)
 
     def test_reads_jwt_secret_from_env(self, tmp_path: Path) -> None:
         from osa.cli.instance import _effective_jwt_secret
@@ -125,6 +128,19 @@ class TestEffectiveJwtSecret:
         template = _compose_template_path().read_text()
         assert "OSA_AUTH__JWT__SECRET: ${JWT_SECRET}" in template
 
+    def test_compose_dashboard_shares_jwt_secret(self) -> None:
+        # The dashboard mints its archive token with JWT_SECRET, so it must be
+        # fed the same value the server validates with, and address the server.
+        template = _compose_template_path().read_text()
+        assert "ghcr.io/opensciencearchive/osa-dashboard" in template
+        assert "JWT_SECRET: ${JWT_SECRET}" in template
+        assert "OSA_API_URL: http://server:8000" in template
+
+    def test_compose_dashboard_binds_loopback(self) -> None:
+        # Default dashboard credentials must not be reachable from the network.
+        template = _compose_template_path().read_text()
+        assert "127.0.0.1:${DASHBOARD_PORT:-8081}:3000" in template
+
 
 class TestHelpers:
     def test_compose_template_path_exists(self) -> None:
@@ -172,12 +188,55 @@ class TestInitProject:
         assert "POSTGRES_PASSWORD=" in env
         assert "JWT_SECRET=" in env
 
-    def test_env_has_well_known_dev_secrets(self, tmp_path: Path) -> None:
+    def test_env_has_dashboard_credentials(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
         init_project(project_dir=project)
         env = (project / ".env").read_text()
-        assert "POSTGRES_PASSWORD=osa-local-dev-password-CHANGE-IN-PRODUCTION" in env
-        assert "JWT_SECRET=osa-local-dev-jwt-secret-CHANGE-IN-PRODUCTION" in env
+        assert "DASHBOARD_USERNAME=" in env
+        assert "DASHBOARD_PASSWORD=" in env
+        assert "SESSION_SECRET=" in env
+
+    def test_env_secrets_are_generated_not_placeholders(self, tmp_path: Path) -> None:
+        from osa.cli.instance import _read_env_file
+
+        init_project(project_dir=tmp_path / "a")
+        init_project(project_dir=tmp_path / "b")
+        a = _read_env_file(tmp_path / "a" / ".env")
+        b = _read_env_file(tmp_path / "b" / ".env")
+
+        for key in (
+            "POSTGRES_PASSWORD",
+            "JWT_SECRET",
+            "SESSION_SECRET",
+            "DASHBOARD_PASSWORD",
+        ):
+            assert "CHANGE" not in a[key]  # not a repository placeholder
+            assert len(a[key]) >= 20  # strong
+            assert a[key] != b[key]  # unique per project
+        # JWT/session secrets satisfy the server's 32-char minimum.
+        assert len(a["JWT_SECRET"]) >= 32
+        assert len(a["SESSION_SECRET"]) >= 32
+
+    def test_env_is_owner_readable_only(self, tmp_path: Path) -> None:
+        import stat
+
+        project = tmp_path / "archive"
+        init_project(project_dir=project)
+        mode = stat.S_IMODE((project / ".env").stat().st_mode)
+        assert mode == 0o600  # secrets not readable by other local users
+
+    def test_force_replaces_env_at_0600_no_temp_leftover(self, tmp_path: Path) -> None:
+        # --force must not briefly expose secrets: the new .env is written to a
+        # 0600 temp and atomically renamed, so it ends up 0600 even over a 0644
+        # file, and no temp file is left behind.
+        import stat
+
+        project = tmp_path / "archive"
+        init_project(project_dir=project)
+        (project / ".env").chmod(0o644)  # simulate a pre-existing loose file
+        init_project(project_dir=project, force=True)
+        assert stat.S_IMODE((project / ".env").stat().st_mode) == 0o600
+        assert not list(project.glob(".env.*.tmp"))  # temp renamed away
 
     def test_creates_data_directory(self, tmp_path: Path) -> None:
         project = tmp_path / "archive"
@@ -365,6 +424,32 @@ class TestWriteDevOverride:
         path = _write_dev_override(source=source, project_dir=tmp_path)
         assert path == tmp_path / ".osa" / "docker-compose.dev.yml"
 
+    def test_builds_dashboard_from_monorepo_sibling(self, tmp_path: Path) -> None:
+        # source is <root>/server; build the sibling apps/dashboard from source
+        # (not pull), but not web (excluded).
+        root = tmp_path / "platform"
+        source = root / "server"
+        source.mkdir(parents=True)
+        (root / "apps" / "dashboard").mkdir(parents=True)
+        (root / "web").mkdir()
+        (tmp_path / ".osa").mkdir()
+        data = yaml.safe_load(
+            _write_dev_override(source=source, project_dir=tmp_path).read_text()
+        )
+        dash = data["services"]["dashboard"]
+        assert dash["build"]["context"] == str((root / "apps" / "dashboard").resolve())
+        assert dash["build"]["args"]["NEXT_PUBLIC_IS_PLATFORM"] == "false"
+        assert "web" not in data["services"]  # web is not built by osa start
+
+    def test_no_dashboard_build_without_sibling(self, tmp_path: Path) -> None:
+        source = tmp_path / "standalone-server"  # no apps/dashboard sibling
+        source.mkdir()
+        (tmp_path / ".osa").mkdir()
+        data = yaml.safe_load(
+            _write_dev_override(source=source, project_dir=tmp_path).read_text()
+        )
+        assert "dashboard" not in data["services"]
+
 
 def _mock_streamed(returncode: int = 0, output: str = ""):
     from osa.cli.proc import ProcResult
@@ -407,14 +492,64 @@ class TestStartInstance:
         args = mock_run.call_args[0][0]
         assert "--build" in args
 
-    def test_with_ui_adds_profile(self, tmp_path: Path) -> None:
+    def test_source_still_includes_ui(self, tmp_path: Path) -> None:
+        # `--source` builds the server from source but must still bring up the
+        # UI profile (web + dashboard) — it's independent of the source build.
+        _write_osa_yaml(tmp_path)
+        source = tmp_path / "server-src"
+        source.mkdir()
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, source=source, osa_version="v0.0.0")
+        args = mock_run.call_args[0][0]
+        assert "--build" in args
+        assert "--profile" in args
+        assert args[args.index("--profile") + 1] == "ui"
+
+    def test_ui_profile_is_on_by_default(self, tmp_path: Path) -> None:
+        # `osa start` brings up the web UI + dashboard by default.
         _write_osa_yaml(tmp_path)
         with _mock_streamed() as mock_run:
-            start_instance(project_dir=tmp_path, with_ui=True, osa_version="v0.0.0")
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "--profile" in args
-        idx = args.index("--profile")
-        assert args[idx + 1] == "ui"
+        assert args[args.index("--profile") + 1] == "ui"
+
+    def test_no_ui_omits_profile(self, tmp_path: Path) -> None:
+        # `osa start --no-ui` (with_ui=False) starts only the API.
+        _write_osa_yaml(tmp_path)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, with_ui=False, osa_version="v0.0.0")
+        assert "--profile" not in mock_run.call_args[0][0]
+
+    def test_with_ui_reports_dashboard_port(self, tmp_path: Path) -> None:
+        # The printed dashboard URL must reflect the .env port override.
+        from unittest.mock import MagicMock
+
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".env").write_text("JWT_SECRET=x\nDASHBOARD_PORT=9091\n")
+        ui = MagicMock()
+        with _mock_streamed():
+            start_instance(
+                project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
+            )
+        printed = " ".join(str(call) for call in ui.info.call_args_list)
+        assert "9091" in printed  # DASHBOARD_PORT
+        assert "Web UI" not in printed  # web is excluded from `osa start`
+
+    def test_with_ui_empty_port_falls_back_like_compose(self, tmp_path: Path) -> None:
+        # A present-but-empty port must fall back to the default (as compose's
+        # `:-` does), not print a blank port.
+        from unittest.mock import MagicMock
+
+        _write_osa_yaml(tmp_path)
+        (tmp_path / ".env").write_text("JWT_SECRET=x\nDASHBOARD_PORT=\n")
+        ui = MagicMock()
+        with _mock_streamed():
+            start_instance(
+                project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
+            )
+        printed = " ".join(str(call) for call in ui.info.call_args_list)
+        assert "localhost:8081" in printed
 
     def test_raises_when_no_osa_yaml(self, tmp_path: Path) -> None:
         with pytest.raises(InstanceError, match="osa.yaml not found"):
@@ -540,6 +675,43 @@ class TestStopInstance:
         # Retry: .data already gone (tolerated), volume drop now succeeds.
         with _mock_streamed():
             stop_instance(project_dir=tmp_path, wipe_data=True)  # must not raise
+
+
+class TestDashboard:
+    def test_mint_handoff_token_is_signed_short_lived_proof(self) -> None:
+        import base64
+        import hashlib
+        import hmac
+        import time
+
+        from osa.cli.instance import _mint_handoff_token
+
+        token = _mint_handoff_token("session-secret")
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        message = f"{header_b64}.{payload_b64}".encode()
+        expected = hmac.new(b"session-secret", message, hashlib.sha256).digest()
+        assert base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4)) == expected
+        payload = json.loads(
+            base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
+        )
+        assert payload["purpose"] == "cli-handoff"
+        assert 0 < payload["exp"] - int(time.time()) <= 60
+
+    def test_open_dashboard_opens_handoff_url(self, tmp_path: Path) -> None:
+        from osa.cli.instance import open_dashboard
+
+        (tmp_path / ".env").write_text("SESSION_SECRET=sess\nDASHBOARD_PORT=9091\n")
+        with patch("webbrowser.open", return_value=True) as mock_open:
+            open_dashboard(project_dir=tmp_path)
+        url = mock_open.call_args[0][0]
+        assert url.startswith("http://localhost:9091/api/auth/handoff?t=")
+
+    def test_open_dashboard_requires_session_secret(self, tmp_path: Path) -> None:
+        from osa.cli.instance import open_dashboard
+
+        (tmp_path / ".env").write_text("JWT_SECRET=x\n")  # no SESSION_SECRET
+        with pytest.raises(InstanceError, match="SESSION_SECRET is not set"):
+            open_dashboard(project_dir=tmp_path)
 
 
 class TestInstanceLogs:
