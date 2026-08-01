@@ -258,7 +258,7 @@ ORCID_CLIENT_SECRET=
 ORCID_SANDBOX=true
 ORCID_ADMINS=[]
 
-# === Dashboard (management UI, started with `osa start --with-ui`) ===
+# === Dashboard (management UI, started with `osa start`) ===
 # The dashboard mints its archive token with JWT_SECRET (shared with the
 # server) and signs its session cookie with SESSION_SECRET. Log in with
 # DASHBOARD_USERNAME/PASSWORD, or just run `osa dashboard` to open it signed in.
@@ -367,7 +367,6 @@ def _build_compose_command(
     project_dir: Path,
     project_name: str,
     source: Path | None = None,
-    profiles: list[str] | None = None,
 ) -> list[str]:
     cmd = [
         "docker",
@@ -387,9 +386,6 @@ def _build_compose_command(
     override_path = project_dir / "docker-compose.override.yml"
     if override_path.exists():
         cmd.extend(["-f", str(override_path)])
-
-    for profile in profiles or []:
-        cmd.extend(["--profile", profile])
 
     cmd.extend(["--env-file", str(project_dir / ".env")])
 
@@ -462,13 +458,11 @@ def start_instance(
     project_dir: Path,
     detach: bool = True,
     source: Path | None = None,
-    with_ui: bool = True,
     osa_version: str | None = None,
     ui: UI | None = None,
 ) -> None:
     ui = ui or UI.create()
     project_name = _read_project_name(project_dir)
-    profiles = ["ui"] if with_ui else []
 
     if osa_version is not None:
         image_version = osa_version
@@ -481,7 +475,6 @@ def start_instance(
         project_dir=project_dir,
         project_name=project_name,
         source=source,
-        profiles=profiles,
     )
 
     args = [*cmd, "up"]
@@ -514,17 +507,16 @@ def start_instance(
                 hint="Run `osa logs server --tail 50` for details",
             )
     ui.success(f"OSA {image_version} running", arrow=LOCAL_SERVER_URL)
-    if with_ui:
-        # Report the actual configured port, not the default — the operator may
-        # have overridden it in .env. `or` (not a get-default) so a present-but-
-        # empty value falls back like docker compose's `${DASHBOARD_PORT:-8081}`.
-        dashboard_port = (
-            _read_env_file(project_dir / ".env").get("DASHBOARD_PORT") or "8081"
-        )
-        ui.info(
-            f"Dashboard   http://localhost:{dashboard_port}"
-            "  ·  run `osa dashboard` to open it signed in"
-        )
+    # Report the actual configured port, not the default — the operator may
+    # have overridden it in .env. `or` (not a get-default) so a present-but-
+    # empty value falls back like docker compose's `${DASHBOARD_PORT:-8081}`.
+    dashboard_port = (
+        _read_env_file(project_dir / ".env").get("DASHBOARD_PORT") or "8081"
+    )
+    ui.info(
+        f"Dashboard   http://localhost:{dashboard_port}"
+        "  ·  run `osa dashboard` to open it signed in"
+    )
 
 
 def open_dashboard(*, project_dir: Path, ui: UI | None = None) -> None:

@@ -72,20 +72,19 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # The web app is out of date and excluded from `osa start` for now — it sits
-  # in its own `web` profile (the default `ui` profile is server + dashboard).
-  web:
-    image: ghcr.io/opensciencearchive/osa-web:${OSA_IMAGE_VERSION:-latest}
-    environment:
-      API_URL: http://server:8000
-    ports:
-      - "${WEB_PORT:-8080}:3000"
-    depends_on:
-      server:
-        condition: service_healthy
-    profiles:
-      - web
-    restart: unless-stopped
+  # The end-user web app is out of date, so `osa start` does not run it. Kept
+  # here (commented out) to make re-enabling trivial once it's updated: drop the
+  # comments and it joins the stack like every other service.
+  # web:
+  #   image: ghcr.io/opensciencearchive/osa-web:${OSA_IMAGE_VERSION:-latest}
+  #   environment:
+  #     API_URL: http://server:8000
+  #   ports:
+  #     - "${WEB_PORT:-8080}:3000"
+  #   depends_on:
+  #     server:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
   # Management dashboard. Logs in with the dashboard credential, then mints a
   # SUPERADMIN token signed with the SHARED JWT_SECRET (same value the server
@@ -107,8 +106,6 @@ services:
     depends_on:
       server:
         condition: service_healthy
-    profiles:
-      - ui
     restart: unless-stopped
 
 volumes:
