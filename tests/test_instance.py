@@ -372,13 +372,11 @@ class TestBuildComposeCommand:
         cmd = _build_compose_command(project_dir=tmp_path, project_name="test")
         assert "docker-compose.override.yml" not in " ".join(cmd)
 
-    def test_with_profiles(self, tmp_path: Path) -> None:
+    def test_no_profiles(self, tmp_path: Path) -> None:
+        # Profiles are gone — every service in the template is always managed.
         _write_osa_yaml(tmp_path)
-        cmd = _build_compose_command(
-            project_dir=tmp_path, project_name="test", profiles=["ui"]
-        )
-        idx = cmd.index("--profile")
-        assert cmd[idx + 1] == "ui"
+        cmd = _build_compose_command(project_dir=tmp_path, project_name="test")
+        assert "--profile" not in cmd
 
     def test_source_adds_dev_override(self, tmp_path: Path) -> None:
         _write_osa_yaml(tmp_path)
@@ -492,9 +490,16 @@ class TestStartInstance:
         args = mock_run.call_args[0][0]
         assert "--build" in args
 
-    def test_source_still_includes_ui(self, tmp_path: Path) -> None:
-        # `--source` builds the server from source but must still bring up the
-        # UI profile (web + dashboard) — it's independent of the source build.
+    def test_uses_no_profiles(self, tmp_path: Path) -> None:
+        # Profiles are gone — `osa start` manages every service in the template.
+        _write_osa_yaml(tmp_path)
+        with _mock_streamed() as mock_run:
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
+        assert "--profile" not in mock_run.call_args[0][0]
+
+    def test_source_uses_no_profiles(self, tmp_path: Path) -> None:
+        # `--source` builds the server from source and still runs the whole
+        # stack (dashboard included) without any profile gating.
         _write_osa_yaml(tmp_path)
         source = tmp_path / "server-src"
         source.mkdir()
@@ -502,26 +507,9 @@ class TestStartInstance:
             start_instance(project_dir=tmp_path, source=source, osa_version="v0.0.0")
         args = mock_run.call_args[0][0]
         assert "--build" in args
-        assert "--profile" in args
-        assert args[args.index("--profile") + 1] == "ui"
+        assert "--profile" not in args
 
-    def test_ui_profile_is_on_by_default(self, tmp_path: Path) -> None:
-        # `osa start` brings up the web UI + dashboard by default.
-        _write_osa_yaml(tmp_path)
-        with _mock_streamed() as mock_run:
-            start_instance(project_dir=tmp_path, osa_version="v0.0.0")
-        args = mock_run.call_args[0][0]
-        assert "--profile" in args
-        assert args[args.index("--profile") + 1] == "ui"
-
-    def test_no_ui_omits_profile(self, tmp_path: Path) -> None:
-        # `osa start --no-ui` (with_ui=False) starts only the API.
-        _write_osa_yaml(tmp_path)
-        with _mock_streamed() as mock_run:
-            start_instance(project_dir=tmp_path, with_ui=False, osa_version="v0.0.0")
-        assert "--profile" not in mock_run.call_args[0][0]
-
-    def test_with_ui_reports_dashboard_port(self, tmp_path: Path) -> None:
+    def test_reports_dashboard_port(self, tmp_path: Path) -> None:
         # The printed dashboard URL must reflect the .env port override.
         from unittest.mock import MagicMock
 
@@ -529,14 +517,12 @@ class TestStartInstance:
         (tmp_path / ".env").write_text("JWT_SECRET=x\nDASHBOARD_PORT=9091\n")
         ui = MagicMock()
         with _mock_streamed():
-            start_instance(
-                project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
-            )
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0", ui=ui)
         printed = " ".join(str(call) for call in ui.info.call_args_list)
         assert "9091" in printed  # DASHBOARD_PORT
         assert "Web UI" not in printed  # web is excluded from `osa start`
 
-    def test_with_ui_empty_port_falls_back_like_compose(self, tmp_path: Path) -> None:
+    def test_empty_port_falls_back_like_compose(self, tmp_path: Path) -> None:
         # A present-but-empty port must fall back to the default (as compose's
         # `:-` does), not print a blank port.
         from unittest.mock import MagicMock
@@ -545,9 +531,7 @@ class TestStartInstance:
         (tmp_path / ".env").write_text("JWT_SECRET=x\nDASHBOARD_PORT=\n")
         ui = MagicMock()
         with _mock_streamed():
-            start_instance(
-                project_dir=tmp_path, with_ui=True, osa_version="v0.0.0", ui=ui
-            )
+            start_instance(project_dir=tmp_path, osa_version="v0.0.0", ui=ui)
         printed = " ".join(str(call) for call in ui.info.call_args_list)
         assert "localhost:8081" in printed
 
