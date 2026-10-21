@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional  # noqa: UP035 — the legacy spelling is under test
+from typing import List, Optional  # noqa: UP035 — the legacy spellings are under test
 
 from pydantic import BaseModel
 
@@ -299,6 +299,30 @@ class TestHookRejectsUnintrospectableReturn:
             @hook
             def bare_list(record: Record[SampleSchema]) -> list:
                 return []
+
+    def test_typing_list_alias_is_rejected(self) -> None:
+        import pytest
+
+        from osa.authoring.hook import hook
+
+        with pytest.raises(TypeError, match="alias_list"):
+
+            @hook
+            def alias_list(record: Record[SampleSchema]) -> List:  # noqa: UP006
+                return []
+
+    def test_optional_typing_list_alias_is_rejected(self) -> None:
+        import pytest
+
+        from osa.authoring.hook import hook
+
+        with pytest.raises(TypeError, match="optional_alias_list"):
+
+            @hook
+            def optional_alias_list(
+                record: Record[SampleSchema],
+            ) -> Optional[List]:  # noqa: UP006, UP045
+                return None
 
     def test_missing_return_annotation_is_rejected(self) -> None:
         import pytest

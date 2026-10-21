@@ -162,7 +162,14 @@ def _extract_hook_info(fn: types.FunctionType, hook_type: str) -> HookInfo:
     if typing.get_origin(inner) is list:
         cardinality = "many"
         args = typing.get_args(inner)
-        inner = args[0] if args else None
+        if not args:
+            # ``typing.List`` has a list origin and no item type (#20).
+            msg = (
+                f"Hook {fn.__name__} must return list[model] with the model "
+                f"spelled out; got {return_type}"
+            )
+            raise TypeError(msg)
+        inner = args[0]
     if inner is not None:
         if not (isinstance(inner, type) and issubclass(inner, BaseModel)):
             msg = (
