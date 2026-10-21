@@ -2,11 +2,16 @@ default:
     @just --list
 
 # Run all checks (lint, typecheck, test)
-check: lint test
+check: lint test test-examples
 
 # Run tests
 test *args:
     uv run pytest tests/ -v --tb=short {{ args }}
+
+# Run the examples' own tests. The worked reference is documentation that
+# compiles: nothing ran it, so it drifted out of date unnoticed (#227).
+test-examples *args:
+    PYTHONPATH=examples/pockets uv run pytest examples/pockets/tests -v --tb=short {{ args }}
 
 # Run tests with coverage
 coverage:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import types
 import uuid
@@ -173,7 +174,12 @@ def run_ingester_batches(
     #227 loop, which in production cost hours of container time before the
     server learned to detect it. ``max_batches`` bounds anything stranger.
 
+    Mirrors the server rather than improving on it: the session is JSON
+    round-tripped between batches (``session.json`` is the real handoff), and
+    an empty batch ends the run even if it set a session.
+
     ```python
+    # An ingester over 7,600 upstream ids, pulled 100 at a time.
     result = run_ingester_batches(MyIngester, batch_size=100)
     assert len(result.records) == 7600
     assert len(result.batches) == 76
@@ -201,17 +207,33 @@ def run_ingester_batches(
             ctx = IngesterContext(
                 files_dir=resolved_files_dir, output_dir=Path(output_dir)
             )
+            # Hand over a copy, exactly as the runtime hands over whatever it
+            # parsed out of session.json: mutating it in place must not touch
+            # the state we compare against, or an in-place advance reads as no
+            # advance at all.
             batch = asyncio.run(
-                _run_ingester_async(ingester, ctx, limit=remaining, session=session)
+                _run_ingester_async(
+                    ingester, ctx, limit=remaining, session=_serialized(session)
+                )
             )
-            next_session = ctx.session
+            next_session = _serialized(ctx.session)
 
         _check_progress(index, batch, batches, session, next_session)
 
         batches.append(batch)
         records.extend(batch)
 
-        # Setting no session is what ends the run.
+        # The limit is met by the batch in hand — checking it only at the top of
+        # the next iteration mistook "finished on the last allowed batch" for
+        # "ran out of batches" and raised.
+        if limit is not None and len(records) >= limit:
+            break
+
+        # Setting no session is what ends the run, and so does an empty batch:
+        # the server's has_more is `session is not None AND records > 0`. The
+        # harness mirrors it rather than improving on it — continuing past an
+        # empty page would reopen the #227 loop, because a repeated *empty*
+        # window is no evidence of a stall.
         if next_session is None or not batch:
             break
         session = next_session
@@ -229,6 +251,26 @@ def run_ingester_batches(
         batches=batches,
         files_dir=resolved_files_dir,
     )
+
+
+def _serialized(session: dict[str, Any] | None) -> dict[str, Any] | None:
+    """JSON round-trip the session, as the runtime does between batches.
+
+    ``session.json`` is the real handoff, so state that cannot survive it (a
+    ``datetime``, a ``set``, an int-keyed dict) must fail here, in a test, and
+    not in a container mid-run. The copy is also what keeps an ingester's
+    in-place edits off the state the stall check compares against.
+    """
+    if session is None:
+        return None
+    try:
+        return json.loads(json.dumps(session))
+    except TypeError as exc:
+        msg = (
+            f"session state must be JSON-serializable — the runtime writes it to "
+            f"session.json between batches: {exc}"
+        )
+        raise TypeError(msg) from exc
 
 
 def _instantiate(

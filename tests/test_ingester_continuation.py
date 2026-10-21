@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,106 @@ class StallingIngester:
         for item in window:
             yield IngesterRecord(source_id=item, metadata={}, files=[])
         ctx.set_session({"offset": len(window), "total": len(ITEMS)})
+
+
+class InPlaceSessionIngester:
+    """Advances by mutating the session dict it was handed, then setting it.
+
+    Legal — the server hands over a dict parsed from session.json, so mutating
+    it mutates nothing the server keeps. The harness has to match that, or it
+    reports a stall the production runtime would never see.
+    """
+
+    name = "in-place"
+    schedule = None
+    initial_run = None
+    max_file_mb = None
+
+    async def pull(
+        self,
+        *,
+        ctx: IngesterContext,
+        limit: int | None = None,
+        session: dict[str, Any] | None = None,
+    ) -> AsyncIterator[IngesterRecord]:
+        state = session if session is not None else {"offset": 0}
+        start = int(state["offset"])
+        window = ITEMS[start : start + limit] if limit is not None else ITEMS[start:]
+        for item in window:
+            yield IngesterRecord(source_id=item, metadata={}, files=[])
+        state["offset"] = start + len(window)
+        if state["offset"] < len(ITEMS):
+            ctx.set_session(state)
+
+
+class InPlaceRescanIngester:
+    """Advances in place while legitimately re-emitting the same ids each page.
+
+    The server compares the session it wrote with the one it read back, so an
+    in-place update is plainly an advance. A harness that hands the ingester
+    its own copy sees the same thing; one that hands over the object it keeps
+    for comparison sees no change at all, and calls this a stall.
+    """
+
+    name = "in-place-rescan"
+    schedule = None
+    initial_run = None
+    max_file_mb = None
+
+    async def pull(
+        self,
+        *,
+        ctx: IngesterContext,
+        limit: int | None = None,
+        session: dict[str, Any] | None = None,
+    ) -> AsyncIterator[IngesterRecord]:
+        state = session if session is not None else {"page": 0}
+        page = int(state["page"])
+        for item in ITEMS[:2]:
+            yield IngesterRecord(source_id=item, metadata={}, files=[])
+        state["page"] = page + 1
+        if state["page"] < 3:
+            ctx.set_session(state)
+
+
+class UnserializableSessionIngester:
+    """Sets a session the runtime could not write to session.json."""
+
+    name = "unserializable"
+    schedule = None
+    initial_run = None
+    max_file_mb = None
+
+    async def pull(
+        self,
+        *,
+        ctx: IngesterContext,
+        limit: int | None = None,
+        session: dict[str, Any] | None = None,
+    ) -> AsyncIterator[IngesterRecord]:
+        yield IngesterRecord(source_id="rec-1", metadata={}, files=[])
+        ctx.set_session({"cursor": datetime(2026, 1, 1, tzinfo=UTC)})
+
+
+class EmptyPageIngester:
+    """Returns nothing while still setting an advancing session."""
+
+    name = "empty-page"
+    schedule = None
+    initial_run = None
+    max_file_mb = None
+
+    async def pull(
+        self,
+        *,
+        ctx: IngesterContext,
+        limit: int | None = None,
+        session: dict[str, Any] | None = None,
+    ) -> AsyncIterator[IngesterRecord]:
+        start = int((session or {}).get("offset", 0))
+        if start == 0:
+            yield IngesterRecord(source_id="rec-1", metadata={}, files=[])
+        ctx.set_session({"offset": start + 1})
 
 
 class TestPullProtocol:
@@ -189,3 +290,58 @@ class TestRunIngesterBatches:
     def test_limit_caps_the_total_pulled(self) -> None:
         result = run_ingester_batches(SessionPaginatingIngester, batch_size=3, limit=4)
         assert len(result.records) == 4
+
+
+class TestBatchLoopMatchesTheRuntime:
+    """The harness is only useful if a pass here means a pass in production.
+
+    Each of these was a way the loop could disagree with the server: a limit
+    met on the last allowed batch reported a stall, an in-place session update
+    looked like no update at all, and a session the runtime cannot write to
+    session.json sailed through.
+    """
+
+    def test_a_limit_met_on_the_last_allowed_batch_is_not_a_stall(self) -> None:
+        # The limit used to be checked only at the top of the next iteration —
+        # which never came, so the loop fell through to the exhaustion error.
+        result = run_ingester_batches(
+            SessionPaginatingIngester, batch_size=1, limit=1, max_batches=1
+        )
+
+        assert len(result.records) == 1
+
+    def test_the_limit_still_stops_short_of_max_batches(self) -> None:
+        result = run_ingester_batches(
+            SessionPaginatingIngester, batch_size=2, limit=4, max_batches=100
+        )
+
+        assert len(result.records) == 4
+        assert len(result.batches) == 2
+
+    def test_an_in_place_session_update_is_not_a_stall(self) -> None:
+        result = run_ingester_batches(InPlaceSessionIngester, batch_size=3)
+
+        assert [r.source_id for r in result.records] == ITEMS
+
+    def test_an_in_place_update_that_rescans_is_not_a_stall(self) -> None:
+        # Advances the session in place, and re-emits the same ids every page —
+        # the one case where comparing against a mutated input is a false stall.
+        result = run_ingester_batches(InPlaceRescanIngester, batch_size=2)
+
+        assert len(result.batches) == 3
+
+    def test_a_session_the_runtime_cannot_write_is_rejected(self) -> None:
+        # The runtime json.dumps()es the session between batches; a datetime
+        # would blow up there, in a container, mid-run.
+        with pytest.raises(TypeError, match="JSON-serializable"):
+            run_ingester_batches(UnserializableSessionIngester, batch_size=1)
+
+    def test_an_empty_batch_ends_the_run_like_the_server(self) -> None:
+        # The server's has_more is `session is not None AND records > 0`, so an
+        # empty page ends the run even with a cursor set. The harness mirrors
+        # that deliberately: continuing instead would reopen the #227 loop,
+        # since a repeated *empty* window is not evidence of a stall.
+        result = run_ingester_batches(EmptyPageIngester, batch_size=1, max_batches=5)
+
+        assert len(result.batches) == 2
+        assert len(result.records) == 1

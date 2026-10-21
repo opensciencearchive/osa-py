@@ -152,9 +152,10 @@ hands back the session it was given and re-emits the same records:
 ```python
 from osa.testing import run_ingester_batches
 
-result = run_ingester_batches(PDBIngester, batch_size=100)
-assert len(result.records) == 7600
-assert len(result.batches) == 76
+# PDBIngester has three PDB IDs, so a batch size of one drives three batches.
+result = run_ingester_batches(PDBIngester, batch_size=1)
+assert len(result.records) == 3
+assert len(result.batches) == 3
 ```
 
 ## Local development

@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from osa import (
+    Example,
     Field,
     IngesterContext,
     IngesterRecord,
@@ -136,4 +137,26 @@ convention(
     ingester=PDBIngester,
     hooks=[validate_structure, find_pockets],
     files={"accepted_types": [".cif", ".pdb"], "max_count": 5},
+    purpose=(
+        "Protein structures pulled from the PDB, each scored for druggable "
+        "binding pockets, so a structure can be screened before anyone opens it."
+    ),
+    examples=[
+        Example(
+            question="Which structures have a pocket bigger than 500 cubic angstroms?",
+            query='POST /api/v1/data/pdb-structure/pocket {"gte": {"volume": 500}}',
+            interpretation=(
+                "One row per detected pocket; volume is in cubic angstroms, so a "
+                "larger number is a roomier — and more druggable — site."
+            ),
+        )
+    ],
+    example_questions=[
+        "What resolution was this structure solved at?",
+        "Which structures were solved by X-ray crystallography?",
+    ],
+    when_not_to_use=(
+        "Covers only the structures this archive has ingested — it is not a "
+        "mirror of the PDB, and not a structure-prediction service."
+    ),
 )
