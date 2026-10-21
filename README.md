@@ -237,11 +237,11 @@ This builds OCI images for your hooks and ingesters, pushes them to the server's
 
 **Schema** — a Pydantic model defining typed metadata fields. Each field can carry units and constraints. The schema is the contract between depositors, hooks, and the archive.
 
-**Hook** — a pure function decorated with `@hook` that receives a `Record[T]` and returns structured results. Hooks run as OCI containers — the SDK builds the image, the server orchestrates execution.
+**Hook** — a pure function decorated with `@hook` that receives a `Record[T]` and returns structured results. The return annotation defines the feature table: `-> Model` is one row per record, `-> list[Model]` is many, and either may be `| None` for a hook that sometimes has nothing to contribute. `-> None` is a pure validator with no table. Anything else is rejected when the hook is defined. Hooks run as OCI containers — the SDK builds the image, the server orchestrates execution.
 
 **Convention** — a bundle of a schema, hooks, file requirements, and an optional ingester. Conventions are the unit of deployment.
 
-**Ingester** — an async generator that pulls records from external systems (APIs, databases, file servers) into the archive on a schedule.
+**Ingester** — an async generator that pulls records from external systems (APIs, databases, file servers) into the archive on a schedule. Each ingester gets its own image, and `osa deploy` bakes the ingester's name into it as `OSA_INGESTER_NAME`, so a package with several conventions runs the right ingester for each.
 
 **Continuation** — how an ingester paginates. The server calls `pull()` once per batch and hands back whatever the previous batch passed to `ctx.set_session(...)`, starting with `None`. So read your start position out of the `session` argument, make sure the state you set *advances*, and set no session on the final batch — that is what ends the run. An ingester that hands back the state it was given would pull the same window forever, so the server aborts the run instead.
 
