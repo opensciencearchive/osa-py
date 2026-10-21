@@ -295,6 +295,15 @@ def _check_progress(
     identical inputs, and a repeated window of source ids confirms the output
     is identical too. Both together, so an ingester whose session is a constant
     marker but whose records advance is left alone.
+
+    ``session`` must be the loop's own retained copy, never the object handed
+    to ``pull`` — an ingester may advance its state by mutating that dict in
+    place, and comparing against the mutated object reads as no advance at all.
+
+    Nothing here fires on an empty batch, for the same reason the server's
+    window check ignores one: a repeated *empty* window is no evidence of a
+    stall. That is why the loop ends the run on an empty batch — this check
+    could not catch an ingester that returns empty pages forever.
     """
     if not batch or next_session is None or next_session != session:
         return
