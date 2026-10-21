@@ -106,8 +106,13 @@ ENTRYPOINT ["osa-run-hook"]
 """
 
 
-def generate_ingester_dockerfile(project_dir: Path) -> str:
-    """Generate a Dockerfile for an OCI ingester container."""
+def generate_ingester_dockerfile(project_dir: Path, ingester: IngesterInfo) -> str:
+    """Generate a Dockerfile for an OCI ingester container.
+
+    Every ingester image in a project is built from the same source, so the
+    image bakes in ``OSA_INGESTER_NAME`` to say which ingester it runs (#20).
+    A value the server passes at run time overrides it.
+    """
     python_version = _read_python_version(project_dir)
     sdk_path = _find_sdk_path(project_dir)
 
@@ -123,6 +128,7 @@ COPY pyproject.toml README.md* .
 RUN --mount=type=cache,target=/root/.cache/pip pip install .
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps .
+ENV OSA_INGESTER_NAME={ingester.name}
 ENTRYPOINT ["osa-run-ingester"]
 """
 
@@ -135,6 +141,7 @@ COPY pyproject.toml README.md* .
 RUN --mount=type=cache,target=/root/.cache/pip pip install .
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps .
+ENV OSA_INGESTER_NAME={ingester.name}
 ENTRYPOINT ["osa-run-ingester"]
 """
 
@@ -283,7 +290,7 @@ def _build_ingester_image(
     task: Task,
 ) -> tuple[str, str]:
     """Build a Docker image for an ingester and return (image_tag, digest)."""
-    dockerfile_content = generate_ingester_dockerfile(project_dir)
+    dockerfile_content = generate_ingester_dockerfile(project_dir, ingester)
     return _build_image(
         ingester.name,
         dockerfile_content,

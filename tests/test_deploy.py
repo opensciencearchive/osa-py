@@ -8,6 +8,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from osa._registry import IngesterInfo
+
 
 def _quiet_ui():
     from osa.cli.ui import UI
@@ -118,6 +120,13 @@ class TestAuthPreflight:
         assert post.call_count == 0
 
 
+def _ingester_info(name: str) -> IngesterInfo:
+    class _Ingester:
+        pass
+
+    return IngesterInfo(ingester_cls=_Ingester, name=name)
+
+
 class TestDockerfileGeneration:
     def test_generates_dockerfile_from_pyproject(self, tmp_path) -> None:
         from osa.cli.deploy import generate_hook_dockerfile
@@ -175,10 +184,26 @@ class TestDockerfileGeneration:
             'osa-py = { path = "sdk", editable = true }\n'
         )
 
-        dockerfile = generate_ingester_dockerfile(tmp_path)
+        dockerfile = generate_ingester_dockerfile(tmp_path, _ingester_info("fake"))
         assert "COPY .osa-sdk /app/.osa-sdk" in dockerfile
         assert "pip install /app/.osa-sdk" in dockerfile
         assert "osa-run-ingester" in dockerfile
+        assert "ENV OSA_INGESTER_NAME=fake" in dockerfile
+
+    def test_ingester_dockerfile_bakes_in_its_name(self, tmp_path) -> None:
+        """Every ingester image is built from the same source, so the image
+        itself must say which ingester it runs (#20)."""
+        from osa.cli.deploy import generate_ingester_dockerfile
+
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text('[project]\nname = "pilot"\nrequires-python = ">=3.13"\n')
+
+        dockerfile = generate_ingester_dockerfile(tmp_path, _ingester_info("pubmed"))
+        env_lines = [ln for ln in dockerfile.splitlines() if ln.startswith("ENV ")]
+        assert env_lines == ["ENV OSA_INGESTER_NAME=pubmed"]
+        assert dockerfile.index("ENV OSA_INGESTER_NAME") < dockerfile.index(
+            "ENTRYPOINT"
+        )
 
     def test_dockerfile_uses_pypi_when_no_source(self, tmp_path) -> None:
         from osa.cli.deploy import generate_hook_dockerfile

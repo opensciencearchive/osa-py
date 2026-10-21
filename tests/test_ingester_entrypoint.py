@@ -181,3 +181,78 @@ class TestMaxFileMbFilter:
 
         records = _read_records(output_dir)
         assert len(records) == 0
+
+
+class SecondIngester(FakeIngester):
+    """A second registered ingester with its own records, so a test can tell
+    which one the entrypoint actually ran."""
+
+    name = "second"
+    _records: list[IngesterRecord] = []
+
+
+class TestIngesterSelection:
+    """A package with several conventions registers several ingesters. The
+    entrypoint must run the one it is told to, never silently the first (#20).
+    Mirrors ``_resolve_hook_fn`` / ``OSA_HOOK_NAME``."""
+
+    def setup_method(self) -> None:
+        clear()
+        FakeIngester._records = [_make_record("from-first", [])]
+        SecondIngester._records = [_make_record("from-second", [])]
+
+    def _register_two(self) -> None:
+        _ingesters.append(IngesterInfo(ingester_cls=FakeIngester, name="first"))
+        _ingesters.append(IngesterInfo(ingester_cls=SecondIngester, name="second"))
+
+    def test_named_ingester_runs(self, tmp_path: Path, monkeypatch) -> None:
+        self._register_two()
+        monkeypatch.setenv("OSA_INGESTER_NAME", "second")
+        input_dir, output_dir, files_dir = _setup_dirs(tmp_path)
+
+        exit_code = run_ingester_entrypoint(
+            input_dir=input_dir, output_dir=output_dir, files_dir=files_dir
+        )
+
+        assert exit_code == 0
+        assert [r["source_id"] for r in _read_records(output_dir)] == ["from-second"]
+
+    def test_unnamed_with_several_registered_fails(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        self._register_two()
+        monkeypatch.delenv("OSA_INGESTER_NAME", raising=False)
+        input_dir, output_dir, files_dir = _setup_dirs(tmp_path)
+
+        exit_code = run_ingester_entrypoint(
+            input_dir=input_dir, output_dir=output_dir, files_dir=files_dir
+        )
+
+        assert exit_code == 1
+        assert not (output_dir / "records.jsonl").exists()
+
+    def test_unknown_name_fails(self, tmp_path: Path, monkeypatch) -> None:
+        self._register_two()
+        monkeypatch.setenv("OSA_INGESTER_NAME", "nope")
+        input_dir, output_dir, files_dir = _setup_dirs(tmp_path)
+
+        exit_code = run_ingester_entrypoint(
+            input_dir=input_dir, output_dir=output_dir, files_dir=files_dir
+        )
+
+        assert exit_code == 1
+        assert not (output_dir / "records.jsonl").exists()
+
+    def test_unnamed_with_single_registered_runs(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        _ingesters.append(IngesterInfo(ingester_cls=FakeIngester, name="first"))
+        monkeypatch.delenv("OSA_INGESTER_NAME", raising=False)
+        input_dir, output_dir, files_dir = _setup_dirs(tmp_path)
+
+        exit_code = run_ingester_entrypoint(
+            input_dir=input_dir, output_dir=output_dir, files_dir=files_dir
+        )
+
+        assert exit_code == 0
+        assert [r["source_id"] for r in _read_records(output_dir)] == ["from-first"]
