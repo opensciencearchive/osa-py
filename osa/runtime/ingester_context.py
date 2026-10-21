@@ -73,8 +73,20 @@ class IngesterContext:
         )
 
     def set_session(self, state: dict[str, Any]) -> None:
-        """Set continuation state — written to $OSA_OUT/session.json on exit."""
+        """Set continuation state — written to $OSA_OUT/session.json on exit.
+
+        The server hands this back to the next ``pull()`` as its ``session``,
+        so it must *advance*: handing back the state you were given means the
+        next pull is identical, and the server aborts the run rather than loop
+        (#227). Leaving it unset is what ends the run, so skip it on the final
+        batch.
+        """
         self._session = state
+
+    @property
+    def session(self) -> dict[str, Any] | None:
+        """The continuation state set during this pull, if any."""
+        return self._session
 
     def write_session(self) -> None:
         """Write session.json if session state was set. Called by the entrypoint."""

@@ -69,8 +69,17 @@ class PDBIngester:
     initial_run = None
     max_file_mb = 50.0
 
-    async def pull(self, *, ctx: IngesterContext, limit=None, **kwargs):
-        for pdb_id in ["4TOS", "1TIM", "6LU7"][:limit]:
+    async def pull(self, *, ctx: IngesterContext, limit=None, session=None):
+        # Continuation comes from `session`: the server hands back whatever the
+        # previous batch set. Read your start position out of it, and set no
+        # session on the final batch — that is what ends the run.
+        ids = ["4TOS", "1TIM", "6LU7"]
+        start = int((session or {}).get("offset", 0))
+        window = ids[start : start + limit] if limit is not None else ids[start:]
+        if start + len(window) < len(ids):
+            ctx.set_session({"offset": start + len(window)})
+
+        for pdb_id in window:
             entry = httpx.get(f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id}").json()
             file_ref = await ctx.add_file(
                 pdb_id, "structure.cif",
@@ -133,6 +142,21 @@ from osa.testing import run_hook
 run_hook(validate_structure, meta={"pdb_id": "TEST", ...}, files=tmp_path)
 ```
 
+If your source has more records than fit in one batch, test the pagination
+too. `run_ingester` runs a single batch, so it cannot tell you whether your
+continuation works — one batch always looks fine.
+`run_ingester_batches` drives the loop the way the server does, threading each
+batch's session into the next, and raises `StalledIngesterError` if a batch
+hands back the session it was given and re-emits the same records:
+
+```python
+from osa.testing import run_ingester_batches
+
+result = run_ingester_batches(PDBIngester, batch_size=100)
+assert len(result.records) == 7600
+assert len(result.batches) == 76
+```
+
 ## Local development
 
 Run a full OSA stack locally with Docker:
@@ -193,6 +217,8 @@ This builds OCI images for your hooks and ingesters, pushes them to the server's
 **Convention** — a bundle of a schema, hooks, file requirements, and an optional ingester. Conventions are the unit of deployment.
 
 **Ingester** — an async generator that pulls records from external systems (APIs, databases, file servers) into the archive on a schedule.
+
+**Continuation** — how an ingester paginates. The server calls `pull()` once per batch and hands back whatever the previous batch passed to `ctx.set_session(...)`, starting with `None`. So read your start position out of the `session` argument, make sure the state you set *advances*, and set no session on the final batch — that is what ends the run. An ingester that hands back the state it was given would pull the same window forever, so the server aborts the run instead.
 
 **Record\[T\]** — generic container binding a schema type `T` to its metadata, files, and SRN (Scientific Resource Name).
 

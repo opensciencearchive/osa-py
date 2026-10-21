@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel
@@ -69,16 +69,19 @@ class PDBIngester:
         self,
         *,
         ctx: IngesterContext,
-        since: datetime | None = None,
         limit: int | None = None,
-        offset: int = 0,
         session: dict[str, Any] | None = None,
     ) -> AsyncIterator[IngesterRecord]:
         import httpx
 
-        ids = PDB_IDS[offset:]
-        if limit is not None:
-            ids = ids[:limit]
+        # Continuation comes from `session`: the server hands back whatever the
+        # previous batch set, starting with None. Read the start position out of
+        # it — and set no session on the final batch, which is what ends the run.
+        start = int((session or {}).get("offset", 0))
+        ids = PDB_IDS[start : start + limit] if limit is not None else PDB_IDS[start:]
+        next_start = start + len(ids)
+        if next_start < len(PDB_IDS):
+            ctx.set_session({"offset": next_start, "total": len(PDB_IDS)})
 
         async with httpx.AsyncClient() as client:
             for pdb_id in ids:

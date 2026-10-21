@@ -40,6 +40,47 @@ def start_ingestion(
         "Content-Type": "application/json",
     }
 
+    return _post(http, url, headers=headers, payload=payload, action="Ingestion")
+
+
+def cancel_ingestion(
+    *,
+    server: str,
+    ingest_run_id: str,
+    token: str,
+    http: Any = None,
+) -> dict[str, Any]:
+    """Cancel a running ingestion, stopping any further batch scheduling.
+
+    POSTs to /api/v1/ingestions/{id}/cancel. The run is not deleted — its
+    counters and reason stay queryable. A run that has already finished,
+    failed or been cancelled gives a 409, surfaced as an ``IngestionError``
+    rather than a silent no-op.
+
+    A batch already running in its containers finishes; cancelling stops the
+    scheduling of further ones.
+    """
+    if http is None:
+        http = httpx
+
+    url = f"{server.rstrip('/')}/api/v1/ingestions/{ingest_run_id}/cancel"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    return _post(http, url, headers=headers, payload=None, action="Cancel")
+
+
+def _post(
+    http: Any,
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict[str, Any] | None,
+    action: str,
+) -> dict[str, Any]:
+    """POST and raise ``IngestionError`` carrying the server's own detail."""
     resp = http.post(url, json=payload, headers=headers, timeout=30.0)
 
     try:
@@ -49,8 +90,6 @@ def start_ingestion(
             detail = resp.json().get("detail", resp.text)
         except Exception:
             detail = resp.text
-        raise IngestionError(
-            f"Ingestion failed ({resp.status_code}): {detail}"
-        ) from exc
+        raise IngestionError(f"{action} failed ({resp.status_code}): {detail}") from exc
 
     return resp.json()

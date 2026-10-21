@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from osa import Reject
-from osa.testing import run_hook, run_ingester, run_test
+from osa.testing import run_hook, run_ingester, run_ingester_batches, run_test
 
 from pockets import PDBIngester, validate_structure
 
@@ -46,6 +46,19 @@ class TestIntegration:
         assert len(result.records) == 1
         assert result.records[0].source_id == "4TOS"
         assert (result.files_dir / "4TOS" / "structure.cif").exists()
+
+    def test_ingester_paginates_across_batches(self):
+        """The example must demonstrate the contract it documents (#227).
+
+        It used to slice by the `offset` argument and set no session, so it was
+        the silent-truncation variant of #227 — and it only looked correct
+        because its batch size exceeded its three records. An author copying it
+        got a broken ingester.
+        """
+        result = run_ingester_batches(PDBIngester, batch_size=1)
+
+        assert [r.source_id for r in result.records] == ["4TOS", "1TIM", "6LU7"]
+        assert len(result.batches) == 3
 
     def test_full_convention_pipeline(self):
         from osa._registry import _conventions
