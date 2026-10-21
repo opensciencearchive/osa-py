@@ -26,7 +26,7 @@ from datetime import date
 import httpx
 from pydantic import BaseModel
 from osa import (
-    Schema, Field, Record, Reject, hook, convention,
+    Schema, Field, Record, Reject, hook, convention, Example,
     IngesterContext, IngesterRecord,
 )
 
@@ -94,11 +94,35 @@ class PDBIngester:
 # 5. Register the convention
 convention(
     title="Protein Structures",
+    description="Experimentally determined protein structures with pocket analysis.",
     version="1.0.0",
     schema=PDBStructure,
     ingester=PDBIngester,
     hooks=[validate_structure, find_pockets],
     files={"accepted_types": [".cif", ".pdb"], "max_count": 5},
+    # Docs are mandatory, and an agent reads them to decide whether this
+    # archive can answer a question at all: a purpose, at least one worked
+    # example, and three distinct trigger questions (a worked example's
+    # question counts toward the three).
+    purpose=(
+        "Look up protein structures by experimental method, resolution and "
+        "molecular weight, and the binding pockets found in their coordinates."
+    ),
+    examples=[
+        Example(
+            question="Which X-ray structures resolve better than 2 A?",
+            query="POST /api/v1/data/pdb-structure@1.0.0/records",
+            interpretation=(
+                "Filter method = 'X-RAY DIFFRACTION' and resolution < 2.0; "
+                "resolution is in angstroms and lower is better."
+            ),
+        )
+    ],
+    example_questions=[
+        "What is the molecular weight of 4TOS?",
+        "Which structures have the largest binding pockets?",
+    ],
+    when_not_to_use="Not a sequence-search service, and it holds no predicted structures.",
 )
 ```
 
