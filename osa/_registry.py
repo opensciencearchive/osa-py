@@ -7,6 +7,8 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import BaseModel
+
 from osa.authoring.example import Example
 from osa.types.ingester import IngesterSchedule, InitialRun, Limits
 from osa.types.schema import MetadataSchema
@@ -21,7 +23,7 @@ class HookInfo:
     hook_type: str
     schema_type: type[MetadataSchema]
     return_type: type | None = None
-    output_type: type | None = None
+    output_type: type[BaseModel] | None = None
     cardinality: str = "one"
     dependencies: dict[str, type] = field(default_factory=dict)
     limits: Limits = field(default_factory=Limits)
@@ -94,6 +96,33 @@ def register_ingester(ingester_cls: type) -> IngesterInfo:
     return info
 
 
+_NONE_TYPE = type(None)
+
+
+def _strip_optional(annotation: Any, *, hook_name: str) -> Any:
+    """Return ``T`` for ``T | None`` / ``Optional[T]``; ``None`` for a bare ``None``.
+
+    ``-> T | None`` is the natural annotation for a hook that has nothing to
+    contribute for some records, and the feature table must keep ``T``'s
+    columns (#20). A union with more than one non-``None`` member has no
+    single output model, so it is rejected here rather than silently
+    producing a column-less table at deploy.
+    """
+    if annotation is _NONE_TYPE:
+        return None
+    origin = typing.get_origin(annotation)
+    if origin is not types.UnionType and origin is not typing.Union:
+        return annotation
+    members = [a for a in typing.get_args(annotation) if a is not _NONE_TYPE]
+    if len(members) == 1:
+        return members[0]
+    msg = (
+        f"Hook {hook_name} must return a single model type "
+        f"(or list[model], optionally | None); got {annotation}"
+    )
+    raise TypeError(msg)
+
+
 def _extract_hook_info(fn: types.FunctionType, hook_type: str) -> HookInfo:
     """Introspect a hook function's type hints to extract metadata."""
     hints = typing.get_type_hints(fn)
@@ -120,16 +149,28 @@ def _extract_hook_info(fn: types.FunctionType, hook_type: str) -> HookInfo:
         msg = f"Hook {fn.__name__} must have a Record[T] parameter"
         raise TypeError(msg)
 
-    output_type: type | None = None
+    if return_type is None:
+        msg = (
+            f"Hook {fn.__name__} must annotate its return type: a Pydantic model, "
+            "list[model], either | None, or None for a pure validator"
+        )
+        raise TypeError(msg)
+
+    output_type: type[BaseModel] | None = None
     cardinality = "one"
-    if return_type is not None:
-        if typing.get_origin(return_type) is list:
-            cardinality = "many"
-            args = typing.get_args(return_type)
-            output_type = args[0] if args else None
-        else:
-            cardinality = "one"
-            output_type = return_type
+    inner = _strip_optional(return_type, hook_name=fn.__name__)
+    if typing.get_origin(inner) is list:
+        cardinality = "many"
+        args = typing.get_args(inner)
+        inner = args[0] if args else None
+    if inner is not None:
+        if not (isinstance(inner, type) and issubclass(inner, BaseModel)):
+            msg = (
+                f"Hook {fn.__name__} must return a Pydantic model, list[model], "
+                f"either | None, or None for a pure validator; got {return_type}"
+            )
+            raise TypeError(msg)
+        output_type = inner
 
     return HookInfo(
         fn=fn,

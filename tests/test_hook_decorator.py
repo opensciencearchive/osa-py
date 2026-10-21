@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional  # noqa: UP035 — the legacy spelling is under test
+
 from pydantic import BaseModel
 
 from osa.types.record import Record
@@ -197,3 +199,114 @@ class TestHookRegistrySchemaType:
 
         info = next(h for h in _hooks if h.fn is detect)
         assert info.schema_type is SampleSchema
+
+
+class TestHookOptionalReturn:
+    """``-> T | None`` is the natural annotation for a hook that sometimes has
+    nothing to contribute (#20). The registry must see through the ``None``
+    so the feature table keeps its columns."""
+
+    def setup_method(self) -> None:
+        from osa._registry import clear
+
+        clear()
+
+    def test_pipe_none_unwraps_to_model(self) -> None:
+        from osa._registry import _hooks
+        from osa.authoring.hook import hook
+
+        @hook
+        def check(record: Record[SampleSchema]) -> QualityResult | None:
+            return None
+
+        assert _hooks[0].output_type is QualityResult
+        assert _hooks[0].cardinality == "one"
+
+    def test_optional_unwraps_to_model(self) -> None:
+        from osa._registry import _hooks
+        from osa.authoring.hook import hook
+
+        @hook
+        def check(record: Record[SampleSchema]) -> Optional[QualityResult]:  # noqa: UP045
+            return None
+
+        assert _hooks[0].output_type is QualityResult
+        assert _hooks[0].cardinality == "one"
+
+    def test_optional_list_unwraps_to_many(self) -> None:
+        from osa._registry import _hooks
+        from osa.authoring.hook import hook
+
+        @hook
+        def detect(record: Record[SampleSchema]) -> list[PocketResult] | None:
+            return None
+
+        assert _hooks[0].output_type is PocketResult
+        assert _hooks[0].cardinality == "many"
+
+    def test_none_return_is_a_validator(self) -> None:
+        from osa._registry import _hooks
+        from osa.authoring.hook import hook
+
+        @hook
+        def validate(record: Record[SampleSchema]) -> None:
+            return None
+
+        assert _hooks[0].output_type is None
+        assert _hooks[0].cardinality == "one"
+
+
+class TestHookRejectsUnintrospectableReturn:
+    """A hook whose output cannot become feature columns is a bug at the
+    moment it is written, not after deploy (#20)."""
+
+    def setup_method(self) -> None:
+        from osa._registry import clear
+
+        clear()
+
+    def test_multi_member_union_is_rejected(self) -> None:
+        import pytest
+
+        from osa.authoring.hook import hook
+
+        with pytest.raises(TypeError, match="either_or"):
+
+            @hook
+            def either_or(
+                record: Record[SampleSchema],
+            ) -> PocketResult | QualityResult:
+                return PocketResult(pocket_id="a", score=1.0)
+
+    def test_plain_dict_is_rejected(self) -> None:
+        import pytest
+
+        from osa.authoring.hook import hook
+
+        with pytest.raises(TypeError, match=r"raw_dict.*dict"):
+
+            @hook
+            def raw_dict(record: Record[SampleSchema]) -> dict:
+                return {}
+
+    def test_untyped_list_is_rejected(self) -> None:
+        import pytest
+
+        from osa.authoring.hook import hook
+
+        with pytest.raises(TypeError, match="bare_list"):
+
+            @hook
+            def bare_list(record: Record[SampleSchema]) -> list:
+                return []
+
+    def test_missing_return_annotation_is_rejected(self) -> None:
+        import pytest
+
+        from osa.authoring.hook import hook
+
+        with pytest.raises(TypeError, match="unannotated"):
+
+            @hook
+            def unannotated(record: Record[SampleSchema]):
+                return None

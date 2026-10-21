@@ -269,7 +269,7 @@ class TestColumnMetadataEmission:
         from pydantic import Field as PydanticField
 
         from osa._registry import HookInfo
-        from osa.cli.deploy import _hook_columns
+        from osa.manifest import hook_columns
 
         class Row(BaseModel):
             score: float = PydanticField(
@@ -287,7 +287,7 @@ class TestColumnMetadataEmission:
             output_type=Row,
             cardinality="many",
         )
-        col = _hook_columns(info)[0]
+        col = hook_columns(info)[0]
         assert col.description == "Pocket score"
         assert col.unit == "kcal/mol"
 
