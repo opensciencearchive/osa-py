@@ -18,7 +18,7 @@ from osa._registry import ConventionInfo, HookInfo, IngesterInfo, _conventions, 
 from osa.authoring.example import Example
 from osa.cli.proc import run_streamed, tail
 from osa.cli.ui import UI, Task
-from osa.manifest import ColumnDef, generate_columns
+from osa.manifest import ColumnDef, hook_columns
 from osa.types.ingester import IngesterSchedule, InitialRun, Limits
 from osa.types.schema import FieldDefinition
 
@@ -106,8 +106,13 @@ ENTRYPOINT ["osa-run-hook"]
 """
 
 
-def generate_ingester_dockerfile(project_dir: Path) -> str:
-    """Generate a Dockerfile for an OCI ingester container."""
+def generate_ingester_dockerfile(project_dir: Path, ingester: IngesterInfo) -> str:
+    """Generate a Dockerfile for an OCI ingester container.
+
+    Every ingester image in a project is built from the same source, so the
+    image bakes in ``OSA_INGESTER_NAME`` to say which ingester it runs (#20).
+    A value the server passes at run time overrides it.
+    """
     python_version = _read_python_version(project_dir)
     sdk_path = _find_sdk_path(project_dir)
 
@@ -123,6 +128,7 @@ COPY pyproject.toml README.md* .
 RUN --mount=type=cache,target=/root/.cache/pip pip install .
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps .
+ENV OSA_INGESTER_NAME={ingester.name}
 ENTRYPOINT ["osa-run-ingester"]
 """
 
@@ -135,6 +141,7 @@ COPY pyproject.toml README.md* .
 RUN --mount=type=cache,target=/root/.cache/pip pip install .
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-deps .
+ENV OSA_INGESTER_NAME={ingester.name}
 ENTRYPOINT ["osa-run-ingester"]
 """
 
@@ -283,7 +290,7 @@ def _build_ingester_image(
     task: Task,
 ) -> tuple[str, str]:
     """Build a Docker image for an ingester and return (image_tag, digest)."""
-    dockerfile_content = generate_ingester_dockerfile(project_dir)
+    dockerfile_content = generate_ingester_dockerfile(project_dir, ingester)
     return _build_image(
         ingester.name,
         dockerfile_content,
@@ -312,17 +319,6 @@ def _resolve_source_ref(project_dir: Path) -> str:
     if result.returncode != 0 or not sha:
         return "git:unknown"
     return f"git:{sha}"
-
-
-def _hook_columns(hook: HookInfo) -> list[ColumnDef]:
-    """Feature columns for a hook whose output is a Pydantic model, else []."""
-    if (
-        hook.output_type is not None
-        and isinstance(hook.output_type, type)
-        and issubclass(hook.output_type, BaseModel)
-    ):
-        return generate_columns(hook.output_type)
-    return []
 
 
 _MIN_DISTINCT_TRIGGER_QUESTIONS = 3
@@ -469,7 +465,7 @@ def build_manifest(conv: ConventionInfo) -> ConventionManifest:
                 config={},
                 limits=info.limits,
                 feature=Feature(
-                    cardinality=info.cardinality, columns=_hook_columns(info)
+                    cardinality=info.cardinality, columns=hook_columns(info)
                 ),
             )
         )

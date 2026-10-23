@@ -160,6 +160,24 @@ class TestNewManifestGeneration:
         assert h.cardinality == "many"
         assert len(h.columns) == 4
 
+    def test_optional_model_hook_keeps_columns(self) -> None:
+        """``-> T | None`` must register T's columns, not an empty table (#20)."""
+        from osa.authoring.hook import hook
+        from osa.manifest import generate_manifest
+
+        @hook
+        def score(record: Record[SampleSchema]) -> PocketResult | None:
+            return None
+
+        h = generate_manifest().hooks[0]
+        assert h.cardinality == "one"
+        assert [c.name for c in h.columns] == [
+            "pocket_id",
+            "score",
+            "volume",
+            "n_spheres",
+        ]
+
     def test_manifest_includes_schemas(self) -> None:
         from osa.authoring.hook import hook
         from osa.manifest import generate_manifest

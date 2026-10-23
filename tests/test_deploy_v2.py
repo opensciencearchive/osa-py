@@ -6,9 +6,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from osa import Example
 from osa._registry import ConventionInfo, HookInfo, IngesterInfo, clear
+from osa.types.record import Record
+from osa.types.schema import MetadataSchema
 
 
 class FakeSchema:
@@ -47,6 +50,18 @@ class FakeIngester:
     class RuntimeConfig:
         def model_dump(self) -> dict:
             return {"email": "", "batch_size": 100}
+
+
+class RealSchema(MetadataSchema):
+    """A genuine MetadataSchema for tests that go through ``@hook``."""
+
+    __schema_id__ = "real-schema"
+
+    title: str
+
+
+class Score(BaseModel):
+    value: float = Field(description="How good it is")
 
 
 def fake_hook(record):
@@ -261,10 +276,16 @@ class TestBuildManifest:
 
 
 class TestHookColumns:
+    """Feature columns come from one shared function (``osa.manifest.hook_columns``)
+    so ``osa manifest`` and ``osa deploy`` cannot disagree (#20)."""
+
+    def setup_method(self) -> None:
+        clear()
+
     def test_columns_from_output_model(self) -> None:
         from pydantic import BaseModel
 
-        from osa.cli.deploy import _hook_columns
+        from osa.manifest import hook_columns
 
         class Pocket(BaseModel):
             pocket_id: int
@@ -278,10 +299,10 @@ class TestHookColumns:
             output_type=Pocket,
             cardinality="many",
         )
-        assert len(_hook_columns(hook_info)) == 2
+        assert len(hook_columns(hook_info)) == 2
 
     def test_empty_columns_when_no_output_type(self) -> None:
-        from osa.cli.deploy import _hook_columns
+        from osa.manifest import hook_columns
 
         hook_info = HookInfo(
             fn=fake_hook,
@@ -291,7 +312,38 @@ class TestHookColumns:
             output_type=None,
             cardinality="one",
         )
-        assert _hook_columns(hook_info) == []
+        assert hook_columns(hook_info) == []
+
+    def test_deploy_payload_keeps_columns_for_optional_hook(self) -> None:
+        """The deploy body for ``-> T | None`` carries T's columns end to end."""
+        from osa.authoring.hook import hook
+        from osa.cli.deploy import build_manifest
+
+        @hook
+        def score_one(record: Record[RealSchema]) -> Score | None:
+            return None
+
+        conv = ConventionInfo(
+            title="Test",
+            description="A test convention",
+            version="1.0.0",
+            schema_type=RealSchema,
+            file_requirements={},
+            hooks=[score_one],
+            ingester_info=None,
+            **_docs_kwargs(),
+        )
+        wire = build_manifest(conv).model_dump(by_alias=True, exclude_none=True)
+        feature = wire["hooks"][0]["feature"]
+        assert feature["cardinality"] == "one"
+        assert feature["columns"] == [
+            {
+                "name": "value",
+                "json_type": "number",
+                "required": True,
+                "description": "How good it is",
+            }
+        ]
 
 
 class TestResolveSourceRef:

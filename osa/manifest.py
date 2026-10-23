@@ -145,21 +145,25 @@ def _json_schema(cls: type) -> dict[str, Any]:
     return {}
 
 
+def hook_columns(info: HookInfo) -> list[ColumnDef]:
+    """Feature-table columns for a registered hook.
+
+    Registration guarantees ``output_type`` is a Pydantic model or ``None``
+    (a pure validator, which has no feature table), so there is no silent
+    fallback here: whatever the hook returns is what the table gets (#20).
+    """
+    if info.output_type is None:
+        return []
+    return generate_columns(info.output_type)
+
+
 def _build_hook(info: HookInfo) -> HookManifestEntry:
     """Build a HookManifestEntry from introspected HookInfo."""
-    columns: list[ColumnDef] = []
-    if (
-        info.output_type is not None
-        and isinstance(info.output_type, type)
-        and issubclass(info.output_type, BaseModel)
-    ):
-        columns = generate_columns(info.output_type)
-
     return HookManifestEntry(
         name=info.name,
         record_schema=info.schema_type.__name__,
         cardinality=info.cardinality,
-        columns=columns,
+        columns=hook_columns(info),
         runner="oci",
     )
 
