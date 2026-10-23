@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel
 
 from osa import (
+    Example,
     Field,
     IngesterContext,
     IngesterRecord,
@@ -69,16 +70,19 @@ class PDBIngester:
         self,
         *,
         ctx: IngesterContext,
-        since: datetime | None = None,
         limit: int | None = None,
-        offset: int = 0,
         session: dict[str, Any] | None = None,
     ) -> AsyncIterator[IngesterRecord]:
         import httpx
 
-        ids = PDB_IDS[offset:]
-        if limit is not None:
-            ids = ids[:limit]
+        # Continuation comes from `session`: the server hands back whatever the
+        # previous batch set, starting with None. Read the start position out of
+        # it — and set no session on the final batch, which is what ends the run.
+        start = int((session or {}).get("offset", 0))
+        ids = PDB_IDS[start : start + limit] if limit is not None else PDB_IDS[start:]
+        next_start = start + len(ids)
+        if next_start < len(PDB_IDS):
+            ctx.set_session({"offset": next_start, "total": len(PDB_IDS)})
 
         async with httpx.AsyncClient() as client:
             for pdb_id in ids:
@@ -133,4 +137,26 @@ convention(
     ingester=PDBIngester,
     hooks=[validate_structure, find_pockets],
     files={"accepted_types": [".cif", ".pdb"], "max_count": 5},
+    purpose=(
+        "Protein structures pulled from the PDB, each scored for druggable "
+        "binding pockets, so a structure can be screened before anyone opens it."
+    ),
+    examples=[
+        Example(
+            question="Which structures have a pocket bigger than 500 cubic angstroms?",
+            query='POST /api/v1/data/pdb-structure/pocket {"gte": {"volume": 500}}',
+            interpretation=(
+                "One row per detected pocket; volume is in cubic angstroms, so a "
+                "larger number is a roomier — and more druggable — site."
+            ),
+        )
+    ],
+    example_questions=[
+        "What resolution was this structure solved at?",
+        "Which structures were solved by X-ray crystallography?",
+    ],
+    when_not_to_use=(
+        "Covers only the structures this archive has ingested — it is not a "
+        "mirror of the PDB, and not a structure-prediction service."
+    ),
 )

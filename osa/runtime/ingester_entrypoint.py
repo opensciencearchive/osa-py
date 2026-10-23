@@ -4,7 +4,7 @@ Run as: python -m osa.runtime.ingester_entrypoint
 
 Flow:
 1. Read $OSA_IN/config.json → ingester config
-2. Parse env vars: OSA_SINCE, OSA_LIMIT, OSA_OFFSET
+2. Parse env vars: OSA_LIMIT
 3. Discover ingester class from _ingesters registry
 4. Create IngesterContext(files_dir=$OSA_FILES, output_dir=$OSA_OUT)
 5. Call ingester.pull() → AsyncIterator[IngesterRecord]
@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from osa._registry import _ingesters
@@ -78,18 +77,12 @@ async def _run(
             log.error("failed to read config.json: %s", exc)
             return 1
 
-    # Parse env vars
-    since: datetime | None = None
-    since_str = os.environ.get("OSA_SINCE")
-    if since_str:
-        since = datetime.fromisoformat(since_str)
-
+    # Parse env vars. OSA_LIMIT is the only knob: continuation rides
+    # session.json, never a position or a watermark (#227).
     limit: int | None = None
     limit_str = os.environ.get("OSA_LIMIT")
     if limit_str:
         limit = int(limit_str)
-
-    offset = int(os.environ.get("OSA_OFFSET", "0"))
 
     # Read session from input if available
     session = None
@@ -112,11 +105,9 @@ async def _run(
     ctx = IngesterContext(files_dir=files_dir, output_dir=output_dir)
 
     log.info(
-        "INGESTER START name=%s since=%s limit=%s offset=%d session=%s",
+        "INGESTER START name=%s limit=%s session=%s",
         ingester_info.name,
-        since,
         limit,
-        offset,
         session,
     )
 
@@ -130,9 +121,7 @@ async def _run(
         with records_path.open("w") as f:
             async for record in ingester.pull(
                 ctx=ctx,
-                since=since,
                 limit=limit,
-                offset=offset,
                 session=session,
             ):
                 if max_file_mb is not None:

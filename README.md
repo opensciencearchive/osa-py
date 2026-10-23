@@ -26,7 +26,7 @@ from datetime import date
 import httpx
 from pydantic import BaseModel
 from osa import (
-    Schema, Field, Record, Reject, hook, convention,
+    Schema, Field, Record, Reject, hook, convention, Example,
     IngesterContext, IngesterRecord,
 )
 
@@ -69,8 +69,17 @@ class PDBIngester:
     initial_run = None
     max_file_mb = 50.0
 
-    async def pull(self, *, ctx: IngesterContext, limit=None, **kwargs):
-        for pdb_id in ["4TOS", "1TIM", "6LU7"][:limit]:
+    async def pull(self, *, ctx: IngesterContext, limit=None, session=None):
+        # Continuation comes from `session`: the server hands back whatever the
+        # previous batch set. Read your start position out of it, and set no
+        # session on the final batch — that is what ends the run.
+        ids = ["4TOS", "1TIM", "6LU7"]
+        start = int((session or {}).get("offset", 0))
+        window = ids[start : start + limit] if limit is not None else ids[start:]
+        if start + len(window) < len(ids):
+            ctx.set_session({"offset": start + len(window)})
+
+        for pdb_id in window:
             entry = httpx.get(f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id}").json()
             file_ref = await ctx.add_file(
                 pdb_id, "structure.cif",
@@ -85,11 +94,35 @@ class PDBIngester:
 # 5. Register the convention
 convention(
     title="Protein Structures",
+    description="Experimentally determined protein structures with pocket analysis.",
     version="1.0.0",
     schema=PDBStructure,
     ingester=PDBIngester,
     hooks=[validate_structure, find_pockets],
     files={"accepted_types": [".cif", ".pdb"], "max_count": 5},
+    # Docs are mandatory, and an agent reads them to decide whether this
+    # archive can answer a question at all: a purpose, at least one worked
+    # example, and three distinct trigger questions (a worked example's
+    # question counts toward the three).
+    purpose=(
+        "Look up protein structures by experimental method, resolution and "
+        "molecular weight, and the binding pockets found in their coordinates."
+    ),
+    examples=[
+        Example(
+            question="Which X-ray structures resolve better than 2 A?",
+            query="POST /api/v1/data/pdb-structure@1.0.0/records",
+            interpretation=(
+                "Filter method = 'X-RAY DIFFRACTION' and resolution < 2.0; "
+                "resolution is in angstroms and lower is better."
+            ),
+        )
+    ],
+    example_questions=[
+        "What is the molecular weight of 4TOS?",
+        "Which structures have the largest binding pockets?",
+    ],
+    when_not_to_use="Not a sequence-search service, and it holds no predicted structures.",
 )
 ```
 
@@ -131,6 +164,22 @@ You can also test individual hooks in-process with synthetic data:
 from osa.testing import run_hook
 
 run_hook(validate_structure, meta={"pdb_id": "TEST", ...}, files=tmp_path)
+```
+
+If your source has more records than fit in one batch, test the pagination
+too. `run_ingester` runs a single batch, so it cannot tell you whether your
+continuation works — one batch always looks fine.
+`run_ingester_batches` drives the loop the way the server does, threading each
+batch's session into the next, and raises `StalledIngesterError` if a batch
+hands back the session it was given and re-emits the same records:
+
+```python
+from osa.testing import run_ingester_batches
+
+# PDBIngester has three PDB IDs, so a batch size of one drives three batches.
+result = run_ingester_batches(PDBIngester, batch_size=1)
+assert len(result.records) == 3
+assert len(result.batches) == 3
 ```
 
 ## Local development
@@ -193,6 +242,8 @@ This builds OCI images for your hooks and ingesters, pushes them to the server's
 **Convention** — a bundle of a schema, hooks, file requirements, and an optional ingester. Conventions are the unit of deployment.
 
 **Ingester** — an async generator that pulls records from external systems (APIs, databases, file servers) into the archive on a schedule.
+
+**Continuation** — how an ingester paginates. The server calls `pull()` once per batch and hands back whatever the previous batch passed to `ctx.set_session(...)`, starting with `None`. So read your start position out of the `session` argument, make sure the state you set *advances*, and set no session on the final batch — that is what ends the run. An ingester that hands back the state it was given would pull the same window forever, so the server aborts the run instead.
 
 **Record\[T\]** — generic container binding a schema type `T` to its metadata, files, and SRN (Scientific Resource Name).
 
