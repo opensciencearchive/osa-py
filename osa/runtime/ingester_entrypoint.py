@@ -4,8 +4,8 @@ Run as: python -m osa.runtime.ingester_entrypoint
 
 Flow:
 1. Read $OSA_IN/config.json → ingester config
-2. Parse env vars: OSA_LIMIT
-3. Discover ingester class from _ingesters registry
+2. Parse env vars: OSA_LIMIT, OSA_INGESTER_NAME
+3. Select the ingester named by OSA_INGESTER_NAME (or the only one registered)
 4. Create IngesterContext(files_dir=$OSA_FILES, output_dir=$OSA_OUT)
 5. Call ingester.pull() → AsyncIterator[IngesterRecord]
 6. Write each record as a JSON line to $OSA_OUT/records.jsonl
@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 
-from osa._registry import _ingesters
+from osa._registry import IngesterInfo, _ingesters
 from osa.runtime.ingester_context import IngesterContext
 from osa.runtime.logging import setup_logging
 
@@ -36,6 +36,40 @@ def _discover_conventions() -> None:
 
     for ep in importlib.metadata.entry_points(group="osa.conventions"):
         importlib.import_module(ep.value)
+
+
+class IngesterSelectionError(RuntimeError):
+    """No single ingester could be chosen for this container."""
+
+
+def _resolve_ingester() -> IngesterInfo:
+    """Pick the ingester to run from ``OSA_INGESTER_NAME``, or the only one.
+
+    Mirrors ``_resolve_hook_fn`` / ``OSA_HOOK_NAME``: a package with several
+    conventions registers several ingesters, and running whichever was
+    imported first would pull the wrong convention's records and still
+    report success (#20). ``osa deploy`` bakes the name into each image;
+    a value the server passes at runtime takes precedence over that.
+    Raises ``IngesterSelectionError`` when no single ingester can be chosen.
+    """
+    if not _ingesters:
+        raise IngesterSelectionError("no ingesters registered")
+
+    registered = ", ".join(info.name for info in _ingesters)
+    name = os.environ.get("OSA_INGESTER_NAME")
+    if name:
+        matches = [info for info in _ingesters if info.name == name]
+        if not matches:
+            raise IngesterSelectionError(
+                f"ingester '{name}' not found in registry (registered: {registered})"
+            )
+        return matches[0]
+    if len(_ingesters) == 1:
+        return _ingesters[0]
+    raise IngesterSelectionError(
+        f"OSA_INGESTER_NAME not set and {len(_ingesters)} ingesters registered "
+        f"({registered})"
+    )
 
 
 async def _run(
@@ -55,12 +89,11 @@ async def _run(
     if files_dir is None:
         files_dir = Path(os.environ.get("OSA_FILES", "/osa/files"))
 
-    # Discover ingester
-    if not _ingesters:
-        log.error("no ingesters registered")
+    try:
+        ingester_info = _resolve_ingester()
+    except IngesterSelectionError as exc:
+        log.error("%s", exc)
         return 1
-
-    ingester_info = _ingesters[0]
     ingester_cls = ingester_info.ingester_cls
 
     # Read config
