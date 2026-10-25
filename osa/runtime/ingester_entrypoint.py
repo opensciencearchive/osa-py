@@ -38,7 +38,11 @@ def _discover_conventions() -> None:
         importlib.import_module(ep.value)
 
 
-def _resolve_ingester() -> IngesterInfo | None:
+class IngesterSelectionError(RuntimeError):
+    """No single ingester could be chosen for this container."""
+
+
+def _resolve_ingester() -> IngesterInfo:
     """Pick the ingester to run from ``OSA_INGESTER_NAME``, or the only one.
 
     Mirrors ``_resolve_hook_fn`` / ``OSA_HOOK_NAME``: a package with several
@@ -46,31 +50,26 @@ def _resolve_ingester() -> IngesterInfo | None:
     imported first would pull the wrong convention's records and still
     report success (#20). ``osa deploy`` bakes the name into each image;
     a value the server passes at runtime takes precedence over that.
-    Returns ``None`` after logging when no single ingester can be chosen.
+    Raises ``IngesterSelectionError`` when no single ingester can be chosen.
     """
     if not _ingesters:
-        log.error("no ingesters registered")
-        return None
+        raise IngesterSelectionError("no ingesters registered")
 
+    registered = ", ".join(info.name for info in _ingesters)
     name = os.environ.get("OSA_INGESTER_NAME")
     if name:
         matches = [info for info in _ingesters if info.name == name]
         if not matches:
-            log.error(
-                "ingester '%s' not found in registry (registered: %s)",
-                name,
-                ", ".join(info.name for info in _ingesters),
+            raise IngesterSelectionError(
+                f"ingester '{name}' not found in registry (registered: {registered})"
             )
-            return None
         return matches[0]
     if len(_ingesters) == 1:
         return _ingesters[0]
-    log.error(
-        "OSA_INGESTER_NAME not set and %d ingesters registered (%s)",
-        len(_ingesters),
-        ", ".join(info.name for info in _ingesters),
+    raise IngesterSelectionError(
+        f"OSA_INGESTER_NAME not set and {len(_ingesters)} ingesters registered "
+        f"({registered})"
     )
-    return None
 
 
 async def _run(
@@ -90,8 +89,10 @@ async def _run(
     if files_dir is None:
         files_dir = Path(os.environ.get("OSA_FILES", "/osa/files"))
 
-    ingester_info = _resolve_ingester()
-    if ingester_info is None:
+    try:
+        ingester_info = _resolve_ingester()
+    except IngesterSelectionError as exc:
+        log.error("%s", exc)
         return 1
     ingester_cls = ingester_info.ingester_cls
 
