@@ -55,7 +55,11 @@ release bump:
     esac
     new="${major}.${minor}.${patch}"
     sed -i '' "s/^version = \"${old}\"/version = \"${new}\"/" pyproject.toml
-    git add pyproject.toml
+    # Relock: uv.lock carries its own copy of the project version, so bumping
+    # pyproject alone leaves the two disagreeing until some unrelated PR
+    # happens to relock and quietly carries the fix (0.8.0 sat stale this way).
+    uv lock
+    git add pyproject.toml uv.lock
     git commit -m "chore: bump version from ${old} to ${new}"
     git tag "v${new}"
     git push && git push --tags
